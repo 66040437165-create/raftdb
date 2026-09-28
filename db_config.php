@@ -1,41 +1,50 @@
 <?php
-// ตั้งค่าการเชื่อมต่อฐานข้อมูล
-$base_url = "http://localhost/projectpa/";
-$servername = "localhost";
-$username = "root";
-$password = ""; 
-$dbname = "project"; // แก้ไขชื่อฐานข้อมูลให้ตรงกับ phpMyAdmin
+// ตั้งค่า Base URL สำหรับรันบน Render
+$base_url = "https://" . $_SERVER['HTTP_HOST'] . "/";
 
-// 1. สร้างการเชื่อมต่อ (Connection) ด้วยระบบ Fallback เพื่อความเสถียร 100%
-if (!isset($conn) || !($conn instanceof mysqli)) {
-    mysqli_report(MYSQLI_REPORT_OFF);
+// ดึงค่า DATABASE_URL จาก Environment Variable ของ Render
+$database_url = getenv("DATABASE_URL");
 
-    $conn = @new mysqli($servername, $username, $password, $dbname);
+if ($database_url) {
+    $db = parse_url($database_url);
+    $servername = $db["host"] ?? "";
+    $username = $db["user"] ?? "";
+    $password = $db["pass"] ?? "";
+    $dbname = ltrim($db["path"] ?? "", "/");
+    $port = $db["port"] ?? "5432";
+} else {
+    // ค่า Fallback สำหรับเทสบน Local (ถ้าจำเป็น)
+    $servername = "localhost";
+    $username = "root";
+    $password = "";
+    $dbname = "project";
+    $port = "5432";
+}
+
+// 1. สร้างการเชื่อมต่อ PostgreSQL ด้วย pg_connect
+if (!isset($conn) || !$conn) {
+    $conn_string = "host=$servername port=$port dbname=$dbname user=$username password=$password";
+    $conn = @pg_connect($conn_string);
     
-    // หาก localhost เชื่อมต่อไม่ได้ ให้ลองใช้ 127.0.0.1 เป็น Fallback
-    if ($conn->connect_error) {
-        $conn = @new mysqli("127.0.0.1", $username, $password, $dbname);
-    }
-    
-    // ตรวจสอบการเชื่อมต่อขั้นสุดท้าย
-    if ($conn->connect_error) {
+    // ตรวจสอบการเชื่อมต่อ
+    if (!$conn) {
+        $error_msg = pg_last_error();
         die("<div style='font-family:Sarabun,sans-serif; padding:20px; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; border-radius:12px; margin:20px;'>
-                <h2>❌ ไม่สามารถเชื่อมต่อฐานข้อมูลได้ (Database Connection Error)</h2>
-                <p><b>สาเหตุ:</b> " . htmlspecialchars($conn->connect_error) . "</p>
-                <p>กรุณาตรวจสอบว่า <b>Apache & MySQL ใน XAMPP Control Panel</b> เปิดทำงานอยู่ และชื่อฐานข้อมูลคือ <code>" . htmlspecialchars($dbname) . "</code></p>
+                <h2>❌ ไม่สามารถเชื่อมต่อฐานข้อมูล PostgreSQL ได้ (Database Connection Error)</h2>
+                <p><b>สาเหตุ:</b> " . htmlspecialchars($error_msg) . "</p>
+                <p>กรุณาตรวจสอบ Environment Variables <code>DATABASE_URL</code> บน Render อีกครั้ง</p>
              </div>");
     }
 
-    // 2. ตั้งค่าภาษาและไทม์โซนระบบให้ตรงกันทุกหน้า
-    $conn->set_charset("utf8mb4");
+    // 2. ตั้งค่าไทม์โซนระบบให้ตรงกัน
     date_default_timezone_set('Asia/Bangkok');
-    $conn->query("SET time_zone = '+07:00'");
+    @pg_query($conn, "SET timezone = 'Asia/Bangkok'");
 
-    // 3. ตรวจสอบการสร้างตารางตั้งค่าพื้นฐาน
-    $conn->query("CREATE TABLE IF NOT EXISTS settings (
+    // 3. ตรวจสอบและสร้างตาราง settings พื้นฐาน (PostgreSQL Syntax)
+    @pg_query($conn, "CREATE TABLE IF NOT EXISTS settings (
         setting_key VARCHAR(50) PRIMARY KEY,
         setting_value TEXT,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
 
     $defaults = [
@@ -45,7 +54,10 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
     ];
 
     foreach ($defaults as $key => $val) {
-        $conn->query("INSERT IGNORE INTO settings (setting_key, setting_value) VALUES ('$key', '$val')");
+        // ใช้ INSERT ... ON CONFLICT สำหรับ PostgreSQL
+        $escaped_key = pg_escape_string($conn, $key);
+        $escaped_val = pg_escape_string($conn, $val);
+        @pg_query($conn, "INSERT INTO settings (setting_key, setting_value) VALUES ('$escaped_key', '$escaped_val') ON CONFLICT (setting_key) DO NOTHING");
     }
 }
 
@@ -85,7 +97,7 @@ if (!function_exists('send_line_message')) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
+            'Content-Type: json',
             'Authorization: Bearer ' . LINE_BOT_ACCESS_TOKEN
         ]);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
@@ -97,10 +109,13 @@ if (!function_exists('send_line_message')) {
 
 // Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar)
 $pending_bookings_count = 0;
-if (isset($conn) && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
-    $res_p = $conn->query("SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending'");
-    if ($res_p && $row_p = $res_p->fetch_assoc()) {
-        $pending_bookings_count = $row_p['cnt'];
+if (isset($conn) && $conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
+    $res_p = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending'");
+    if ($res_p) {
+        $row_p = pg_fetch_assoc($res_p);
+        if ($row_p) {
+            $pending_bookings_count = $row_p['cnt'];
+        }
     }
 }
 ?>
