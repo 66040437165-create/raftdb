@@ -13,51 +13,47 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $password = trim($_POST['password'] ?? '');
 
     if (!empty($username) && !empty($password)) {
-        // ดึงข้อมูลพนักงานจากตาราง employees ตาม username
-        $stmt = $conn->prepare("SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = ? LIMIT 1");
-        
-        if ($stmt) {
-            $stmt->bind_param("s", $username);
-            $stmt->execute();
-            $result = $stmt->get_result();
-
-            if ($result && $user = $result->fetch_assoc()) {
-                // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
-                if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
-                    $error = "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
-                } else {
-                    // ตรวจสอบรหัสผ่าน รองรับทั้งรหัสผ่านธรรมดา (plain text) และ password_hash
-                    $is_valid_pw = ($password === $user['password']) || password_verify($password, $user['password']);
-
-                    if ($is_valid_pw) {
-                        // กำหนดค่าลง Session
-                        $_SESSION['user_id']   = (int)$user['id'];
-                        $_SESSION['username']  = $user['username'];
-                        $_SESSION['fullname']  = $user['full_name'];
-                        $_SESSION['role_id']   = (int)$user['role_id'];
-                        $_SESSION['role']      = ((int)$user['role_id'] === 1) ? 'admin' : 'staff';
-
-                        // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login)
-                        $update_stmt = $conn->prepare("UPDATE employees SET last_login = NOW() WHERE id = ?");
-                        if ($update_stmt) {
-                            $update_stmt->bind_param("i", $user['id']);
-                            $update_stmt->execute();
-                            $update_stmt->close();
-                        }
-
-                        // ทั้ง Admin และ Staff ให้เข้าสู่ Dashboard หลังบ้าน
-                        header("Location: backend/admin_dashboard.php");
-                        exit();
+        if ($conn) {
+            // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (ปรับใช้ PostgreSQL Parameterized Query)
+            $query = "SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = $1 LIMIT 1";
+            $result = @pg_query_params($conn, $query, array($username));
+            
+            if ($result) {
+                if ($user = pg_fetch_assoc($result)) {
+                    // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
+                    if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
+                        $error = "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
                     } else {
-                        $error = "รหัสผ่านไม่ถูกต้อง!";
+                        // ตรวจสอบรหัสผ่าน รองรับทั้งรหัสผ่านธรรมดา (plain text) และ password_hash
+                        $is_valid_pw = ($password === $user['password']) || password_verify($password, $user['password']);
+
+                        if ($is_valid_pw) {
+                            // กำหนดค่าลง Session
+                            $_SESSION['user_id']   = (int)$user['id'];
+                            $_SESSION['username']  = $user['username'];
+                            $_SESSION['fullname']  = $user['full_name'];
+                            $_SESSION['role_id']   = (int)$user['role_id'];
+                            $_SESSION['role']      = ((int)$user['role_id'] === 1) ? 'admin' : 'staff';
+
+                            // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login) ด้วย PostgreSQL syntax
+                            $update_query = "UPDATE employees SET last_login = NOW() WHERE id = $1";
+                            @pg_query_params($conn, $update_query, array($user['id']));
+
+                            // ทั้ง Admin และ Staff ให้เข้าสู่ Dashboard หลังบ้าน
+                            header("Location: backend/admin_dashboard.php");
+                            exit();
+                        } else {
+                            $error = "รหัสผ่านไม่ถูกต้อง!";
+                        }
                     }
+                } else {
+                    $error = "ไม่พบชื่อผู้ใช้งานนี้ในระบบ!";
                 }
             } else {
-                $error = "ไม่พบชื่อผู้ใช้งานนี้ในระบบ!";
+                $error = "เกิดข้อผิดพลาดในการรันคำสั่ง: " . pg_last_error($conn);
             }
-            $stmt->close();
         } else {
-            $error = "เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล: " . $conn->error;
+            $error = "เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล";
         }
     } else {
         $error = "กรุณากรอกชื่อผู้ใช้และรหัสผ่านให้ครบถ้วน!";
