@@ -10,15 +10,28 @@ if (!isset($_SESSION['user_id'])) {
 
 $is_admin = isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1;
 
-// 2. ดึงข้อมูลสถิติพื้นฐานสำหรับการดำเนินงาน (Admin และ Staff ดูได้)
-$res_rafts = $conn->query("SELECT COUNT(*) as total FROM rafts");
-$total_rafts = ($res_rafts && $row = $res_rafts->fetch_assoc()) ? intval($row['total']) : 0;
+// 2. ดึงข้อมูลสถิติพื้นฐานสำหรับการดำเนินงาน (PostgreSQL Syntax)
+$total_rafts = 0;
+$total_users = 0;
+$pending_bookings = 0;
 
-$res_users = $conn->query("SELECT COUNT(*) as total FROM customers");
-$total_users = ($res_users && $row = $res_users->fetch_assoc()) ? intval($row['total']) : 0;
+if ($conn) {
+    $res_rafts = @pg_query($conn, "SELECT COUNT(*) as total FROM rafts");
+    if ($res_rafts && $row = pg_fetch_assoc($res_rafts)) {
+        $total_rafts = intval($row['total']);
+    }
 
-$res_pending = $conn->query("SELECT COUNT(*) as total FROM bookings WHERE status = 'pending'");
-$pending_bookings = ($res_pending && $row = $res_pending->fetch_assoc()) ? intval($row['total']) : 0;
+    $res_users = @pg_query($conn, "SELECT COUNT(*) as total FROM customers");
+    if ($res_users && $row = pg_fetch_assoc($res_users)) {
+        $total_users = intval($row['total']);
+    }
+
+    // สถานะรอตรวจสอบ (status_id = 1)
+    $res_pending = @pg_query($conn, "SELECT COUNT(*) as total FROM bookings WHERE status_id = 1");
+    if ($res_pending && $row = pg_fetch_assoc($res_pending)) {
+        $pending_bookings = intval($row['total']);
+    }
+}
 
 // 3. คำนวณรายได้และรายจ่าย (ดึงเฉพาะเมื่อเป็น Admin เท่านั้น)
 $income_today  = 0;
@@ -26,38 +39,49 @@ $income_month  = 0;
 $expense_today = 0;
 $expense_month = 0;
 
-if ($is_admin) {
+if ($is_admin && $conn) {
     $today = date('Y-m-d');
     $this_month = date('Y-m');
 
-    // คำนวณรายได้
-    $res_inc_today = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
-    $income_today = ($res_inc_today && $row = $res_inc_today->fetch_assoc()) ? floatval($row['total']) : 0;
+    // คำนวณรายได้ (PostgreSQL syntax)
+    $res_inc_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND paid_at::date = '$today'::date");
+    if ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) {
+        $income_today = floatval($row['total']);
+    }
 
-    $res_inc_month = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND paid_at LIKE '$this_month%'");
-    $income_month = ($res_inc_month && $row = $res_inc_month->fetch_assoc()) ? floatval($row['total']) : 0;
+    $res_inc_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
+    if ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) {
+        $income_month = floatval($row['total']);
+    }
 
     // คำนวณรายจ่าย
-    $res_exp_today = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
-    $expense_today = ($res_exp_today && $row = $res_exp_today->fetch_assoc()) ? floatval($row['total']) : 0;
+    $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
+    if ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) {
+        $expense_today = floatval($row['total']);
+    }
 
-    $res_exp_month = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date LIKE '$this_month%'");
-    $expense_month = ($res_exp_month && $row = $res_exp_month->fetch_assoc()) ? floatval($row['total']) : 0;
+    $res_exp_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
+    if ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) {
+        $expense_month = floatval($row['total']);
+    }
 }
 
 // 4. ดึงรายการจอง 5 รายการล่าสุด
-$recent_bookings = $conn->query("
-    SELECT b.*, r.raft_name, 
-           COALESCE(c.customer_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
-           p.amount as paid_amount, p.status as payment_status
-    FROM bookings b
-    LEFT JOIN rafts r ON b.raft_id = r.raft_id
-    LEFT JOIN customers c ON b.customer_id = c.id
-    LEFT JOIN payments p ON b.booking_id = p.booking_id
-    ORDER BY b.booking_id DESC LIMIT 5
-");
+$recent_bookings = null;
+if ($conn) {
+    $sql_recent = "
+        SELECT b.*, r.name as raft_name, 
+               COALESCE(b.guest_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
+               p.amount as paid_amount, p.status as payment_status
+        FROM bookings b
+        LEFT JOIN rafts r ON b.raft_id = r.id
+        LEFT JOIN customers c ON b.customer_id = c.id
+        LEFT JOIN payments p ON b.id = p.booking_id
+        ORDER BY b.id DESC LIMIT 5
+    ";
+    $recent_bookings = @pg_query($conn, $sql_recent);
+}
 ?>
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -224,24 +248,35 @@ $recent_bookings = $conn->query("
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-50 text-sm">
-                            <?php if ($recent_bookings && $recent_bookings->num_rows > 0): ?>
-                                <?php while($row = $recent_bookings->fetch_assoc()): 
+                            <?php if ($recent_bookings && pg_num_rows($recent_bookings) > 0): ?>
+                                <?php while($row = pg_fetch_assoc($recent_bookings)): 
                                     $booker = !empty($row['guest_name']) ? $row['guest_name'] : ($row['customer_name'] ?? 'ลูกค้าทั่วไป');
+                                    
+                                    // รองรับทั้ง status_id และ string status
                                     $status_map = [
+                                        '1'         => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
+                                        '2'         => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
+                                        '3'         => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
+                                        '4'         => ['bg-rose-100 text-rose-700', 'ยกเลิก'],
                                         'pending'   => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
-                                        'confirmed' => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
-                                        'completed' => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
-                                        'cancelled' => ['bg-rose-100 text-rose-700', 'ยกเลิก']
+                                        'confirmed' => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว']
                                     ];
-                                    $badge = $status_map[$row['status']] ?? ['bg-gray-100 text-gray-700', $row['status']];
-                                    $checkin_display = !empty($row['check_in']) ? date('d/m/Y H:i', strtotime($row['check_in'])) : '-';
+                                    $st_key = (string)($row['status_id'] ?? $row['status'] ?? '1');
+                                    $badge = $status_map[$st_key] ?? ['bg-gray-100 text-gray-700', 'รอตรวจสอบ'];
+
+                                    $checkin_display = !empty($row['check_in_date']) ? date('d/m/Y', strtotime($row['check_in_date'])) : '-';
+                                    if (!empty($row['check_in_time'])) {
+                                        $checkin_display .= ' ' . substr($row['check_in_time'], 0, 5);
+                                    }
                                 ?>
                                 <tr class="hover:bg-slate-50 transition">
-                                    <td class="p-4 font-mono font-bold text-blue-600">#<?php echo str_pad($row['booking_id'], 6, '0', STR_PAD_LEFT); ?></td>
+                                    <td class="p-4 font-mono font-bold text-blue-600">
+                                        <?php echo htmlspecialchars($row['booking_code'] ?? ('#' . str_pad($row['id'], 6, '0', STR_PAD_LEFT))); ?>
+                                    </td>
                                     <td class="p-4 font-bold text-slate-700"><?php echo htmlspecialchars($booker); ?></td>
                                     <td class="p-4 text-slate-600"><?php echo htmlspecialchars($row['raft_name'] ?? '-'); ?></td>
                                     <td class="p-4 text-slate-500"><?php echo $checkin_display; ?></td>
-                                    <td class="p-4 font-bold text-emerald-600">฿<?php echo number_format($row['total_price'] ?? 0); ?></td>
+                                    <td class="p-4 font-bold text-emerald-600">฿<?php echo number_format($row['total_amount'] ?? 0); ?></td>
                                     <td class="p-4 text-center">
                                         <span class="px-3 py-1 rounded-full text-xs font-bold <?php echo $badge[0]; ?>"><?php echo $badge[1]; ?></span>
                                     </td>
@@ -262,28 +297,14 @@ $recent_bookings = $conn->query("
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
-            sidebar.classList.toggle('-translate-x-full');
-            sidebar.classList.toggle('sidebar-active');
-            overlay.classList.toggle('hidden');
+            if (sidebar) {
+                sidebar.classList.toggle('-translate-x-full');
+                sidebar.classList.toggle('sidebar-active');
+            }
+            if (overlay) {
+                overlay.classList.toggle('hidden');
+            }
         }
-
-        <?php if ($is_admin): ?>
-        // อัปเดตสถิติการเงิน Real-time เฉพาะผู้ใช้งานที่เป็น Admin
-        function updateStats() {
-            fetch('get_finance_stats.php')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) return;
-                    if (document.getElementById('income_today')) document.getElementById('income_today').innerText = data.income_today;
-                    if (document.getElementById('expense_today')) document.getElementById('expense_today').innerText = data.expense_today;
-                    if (document.getElementById('income_month')) document.getElementById('income_month').innerText = data.income_month;
-                    if (document.getElementById('expense_month')) document.getElementById('expense_month').innerText = data.expense_month;
-                })
-                .catch(err => console.error('Error fetching stats:', err));
-        }
-
-        setInterval(updateStats, 10000);
-        <?php endif; ?>
     </script>
 </body>
 </html>
