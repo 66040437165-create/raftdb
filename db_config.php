@@ -20,7 +20,6 @@ if ($database_url) {
 
 // ถ้ายังต่อไม่ได้ ให้ข้ามไปก่อนเพื่อไม่ให้เว็บ Fatal Error ทันที
 if (!$conn) {
-    // โหมดสำรองกรณีรันหน้าแรก (ยังไม่ดึงข้อมูล DB ทันที)
     $conn = null;
 } else {
     // ตั้งค่าไทม์โซนและตารางพื้นฐานถ้าเชื่อมต่อสำเร็จ
@@ -54,24 +53,26 @@ if (!function_exists('send_line_message')) {
         }
 
         $url = 'https://api.line.me/v2/bot/message/push&#39;;
-        $data = [
+       
+        // จัดโครงสร้างอาเรย์ให้ถูกต้อง ป้องกัน Syntax Error
+        $data = array(
             'to' => $target_id,
-            'messages' => [
-                [
+            'messages' => array(
+                array(
                     'type' => 'text',
                     'text' => $message_text
-                ]
-            ]
-        ];
+                )
+            )
+        );
        
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
             'Content-Type: application/json',
             'Authorization: Bearer ' . LINE_BOT_ACCESS_TOKEN
-        ]);
+        ));
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         $result = curl_exec($ch);
         curl_close($ch);
