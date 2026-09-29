@@ -20,11 +20,11 @@ if ($database_url) {
 
 // ถ้ายังต่อไม่ได้ ให้ข้ามไปก่อนเพื่อไม่ให้เว็บ Fatal Error ทันที
 if (!$conn) {
-    $conn = null;
+    $conn = null; 
 } else {
     // ตั้งค่าไทม์โซนและตารางพื้นฐานถ้าเชื่อมต่อสำเร็จ
     @pg_query($conn, "SET timezone = 'Asia/Bangkok'");
-   
+    
     @pg_query($conn, "CREATE TABLE IF NOT EXISTS settings (
         setting_key VARCHAR(50) PRIMARY KEY,
         setting_value TEXT,
@@ -33,13 +33,13 @@ if (!$conn) {
 }
 
 // --- ตั้งค่า LINE Login ---
-if (!defined("LINE_CLIENT_ID")) define("LINE_CLIENT_ID", "2010677463");
-if (!defined("LINE_CLIENT_SECRET")) define("LINE_CLIENT_SECRET", "3684f4e6a269259f388538a275957873");
-if (!defined("LINE_REDIRECT_URI")) define("LINE_REDIRECT_URI", $base_url . "line_callback.php");
+if (!defined("LINE_CLIENT_ID")) define("LINE_CLIENT_ID", "2010677463"); 
+if (!defined("LINE_CLIENT_SECRET")) define("LINE_CLIENT_SECRET", "3684f4e6a269259f388538a275957873"); 
+if (!defined("LINE_REDIRECT_URI")) define("LINE_REDIRECT_URI", $base_url . "line_callback.php"); 
 
 // --- ตั้งค่า LINE Messaging API ---
-if (!defined("LINE_BOT_ACCESS_TOKEN")) define("LINE_BOT_ACCESS_TOKEN", "C9RIGCTTHW24CjZEyy1glVBPhSLBx15Kb48CQ+qIJX1NZiH3NeQte32Tp1C5zQD2dJIdi8ud55keeFkkcMwlpRsM8CEJHKPiphK1Lzl1NcOQlIyPEdCOjtRpkZYskqbnSDSGiRhCGPM7w3BdJ9ZTXQdB04t89/1O/w1cDnyilFU=");
-if (!defined("LINE_NOTIFY_TARGET_ID")) define("LINE_NOTIFY_TARGET_ID", "Uc363e24c7774830ce61b1995d0b11e9d");
+if (!defined("LINE_BOT_ACCESS_TOKEN")) define("LINE_BOT_ACCESS_TOKEN", "C9RIGCTTHW24CjZEyy1glVBPhSLBx15Kb48CQ+qIJX1NZiH3NeQte32Tp1C5zQD2dJIdi8ud55keeFkkcMwlpRsM8CEJHKPiphK1Lzl1NcOQlIyPEdCOjtRpkZYskqbnSDSGiRhCGPM7w3BdJ9ZTXQdB04t89/1O/w1cDnyilFU="); 
+if (!defined("LINE_NOTIFY_TARGET_ID")) define("LINE_NOTIFY_TARGET_ID", "Uc363e24c7774830ce61b1995d0b11e9d"); 
 
 /**
  * ฟังก์ชันสำหรับส่งข้อความแจ้งเตือนเข้าสู่ LINE
@@ -49,11 +49,11 @@ if (!function_exists("send_line_message")) {
         $target_id = (!empty($custom_target_id)) ? $custom_target_id : LINE_NOTIFY_TARGET_ID;
 
         if (LINE_BOT_ACCESS_TOKEN === "" || empty($target_id)) {
-            return false;
+            return false; 
         }
 
-        $url = "https://api.line.me/v2/bot/message/push&quot;;
-       
+        $url = "https://api.line.me/v2/bot/message/push";
+        
         $data = [
             "to" => $target_id,
             "messages" => [
@@ -63,18 +63,17 @@ if (!function_exists("send_line_message")) {
                 ]
             ]
         ];
-       
+        
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-       
-        // แก้ไขเครื่องหมายตรงนี้ให้เป็น Double Quote (") ทั้งหมด
+        
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             "Content-Type: application/json",
             "Authorization: Bearer " . LINE_BOT_ACCESS_TOKEN
         ]);
-       
+        
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         $result = curl_exec($ch);
         curl_close($ch);
