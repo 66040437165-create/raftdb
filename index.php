@@ -2,25 +2,27 @@
 session_start(); 
 require_once __DIR__ . '/db_config.php'; 
 
-// 1. ดึงค่าตั้งค่าจากฐานข้อมูล
+// 1. ดึงค่าตั้งค่าจากฐานข้อมูล (เปลี่ยนเป็น PostgreSQL syntax)
 $settings = [];
-$res_settings = $conn->query("SELECT * FROM settings");
-if ($res_settings) {
-    while ($row = $res_settings->fetch_assoc()) {
-        $settings[$row['setting_key']] = $row['setting_value'];
+if ($conn) {
+    $res_settings = @pg_query($conn, "SELECT * FROM settings");
+    if ($res_settings) {
+        while ($row = pg_fetch_assoc($res_settings)) {$settings[$row['setting_key']] =$row['setting_value'];
+        }
     }
 }
-$open_time = $settings['open_time'] ?? '09:00';
-$close_time = $settings['close_time'] ?? '17:30';
+$open_time =$settings['open_time'] ?? '09:00';
+$close_time =$settings['close_time'] ?? '17:30';
 
-// 2. รับค่าค้นหาจากฟอร์ม
-$checkin = isset($_GET['checkin']) && !empty($_GET['checkin']) ? $_GET['checkin'] : date('Y-m-d');
-$checkin_time = isset($_GET['checkin_time']) ? $_GET['checkin_time'] : $open_time;
-$checkout = date('Y-m-d', strtotime($checkin . ' +1 day'));
-$checkout_time = '11:00';
+// 2. รับค่าค้นหาจากฟอร์ม (เปลี่ยนการ escape string เป็น PostgreSQL)
+$checkin = isset($_GET['checkin']) && !empty($_GET['checkin']) ?$_GET['checkin'] : date('Y-m-d');
+$checkin_time = isset($_GET['checkin_time']) ? $_GET['checkin_time'] :$open_time;
+$checkout = date('Y-m-d', strtotime($checkin . ' +1 day'));$checkout_time = '11:00';
 
 $guests = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
-$search_keyword = isset($_GET['search']) ? $conn->real_escape_string(trim($_GET['search'])) : '';
+$search_keyword = '';
+if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, trim($_GET['search']));
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -107,7 +109,7 @@ $search_keyword = isset($_GET['search']) ? $conn->real_escape_string(trim($_GET[
                             <i class="fa fa-users absolute left-4 top-1/2 -translate-y-1/2 text-blue-400 text-xs md:hidden"></i>
                             <select name="guests" class="w-full p-3 md:p-2 pl-10 md:pl-2 border-2 md:border-0 md:border-b-2 border-gray-100 md:border-gray-100 outline-none bg-white md:bg-transparent font-bold appearance-none rounded-xl md:rounded-none transition-all">
                                 <option value="2" <?php if($guests<=2) echo 'selected'; ?>>1-2 ท่าน</option>
-                                <option value="5" <?php if($guests>2 && $guests<=5) echo 'selected'; ?>>3-5 ท่าน</option>
+                                <option value="5" <?php if($guests>2 &&$guests<=5) echo 'selected'; ?>>3-5 ท่าน</option>
                                 <option value="10" <?php if($guests>5) echo 'selected'; ?>>6-10 ท่าน</option>
                             </select>
                         </div>
@@ -133,53 +135,52 @@ $search_keyword = isset($_GET['search']) ? $conn->real_escape_string(trim($_GET[
         
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 md:gap-12">
             <?php
-            // 3. ปรับ SQL ดึงข้อมูลจากตาราง rafts
-            $sql = "SELECT r.* FROM rafts r 
-                    WHERE (TRIM(LOWER(r.status)) = 'available' OR r.status = 'ว่าง')";
+            if ($conn) {
+                // 3. ปรับ SQL ดึงข้อมูลจากตาราง rafts (PostgreSQL Syntax)
+                $sql = "SELECT r.* FROM rafts r 
+                        WHERE (TRIM(LOWER(r.status)) = 'available' OR r.status = 'ว่าง')";
 
-            if (!empty($search_keyword)) {
-                $sql .= " AND (r.name LIKE '%$search_keyword%' OR r.raft_code LIKE '%$search_keyword%' OR r.description LIKE '%$search_keyword%')";
-            }
+                if (!empty($search_keyword)) {$sql .= " AND (r.name LIKE '%$search_keyword%' OR r.raft_code LIKE '%$search_keyword\%' OR r.description LIKE '\%$search_keyword%')";
+                }
 
-            // ตรวจสอบกับ check_in_date ในตาราง bookings
-            $sql .= " AND NOT EXISTS (
-                        SELECT 1 FROM bookings b 
-                        WHERE b.raft_id = r.id 
-                          AND b.check_in_date = '$checkin'
-                          AND b.status_id NOT IN (3, 4) -- ไม่นับรายการที่ยกเลิก
-                    )
-                    ORDER BY r.id DESC";
+                // ตรวจสอบกับ check_in_date ในตาราง bookings
+                $sql .= " AND NOT EXISTS (
+                            SELECT 1 FROM bookings b 
+                            WHERE b.raft_id = r.id 
+                              AND b.check_in_date = '$checkin'
+                              AND b.status_id NOT IN (3, 4) -- ไม่นับรายการที่ยกเลิก
+                        )
+                        ORDER BY r.id DESC";
 
-            $result = $conn->query($sql);
-            if ($result && $result->num_rows > 0):
-                while($row = $result->fetch_assoc()):
-                    $raft_id = $row['id'];
-                    $raft_name = htmlspecialchars($row['name']);
-                    
-                    // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
-                    $displayImg = "";
-                    $target_dir = __DIR__ . "/uploads/";
+                $result = @pg_query($conn,$sql);
+                
+                if ($result && pg_num_rows($result) > 0):
+                    while($row = pg_fetch_assoc($result)):
+                        $raft_id =$row['id'];
+                        $raft_name = htmlspecialchars($row['name']);
+                        
+                        // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
+                        $displayImg = "";
+                        $target_dir = __DIR__ . "/uploads/";
 
-                    // 1. ตรวจสอบ featured_image ก่อน
-                    if (!empty($row['featured_image']) && file_exists($target_dir . $row['featured_image'])) {
-                        $displayImg = "uploads/" . $row['featured_image'];
-                    } else {
-                        // 2. ถ้าไม่มี featured_image ให้ไล่เช็ค image_1 ถึง image_5
-                        for ($i = 1; $i <= 5; $i++) {
-                            $img_col = "image_" . $i;
-                            if (!empty($row[$img_col]) && file_exists($target_dir . $row[$img_col])) {
-                                $displayImg = "uploads/" . $row[$img_col];
-                                break;
+                        // 1. ตรวจสอบ featured_image ก่อน
+                        if (!empty($row['featured_image']) && file_exists($target_dir .$row['featured_image'])) {
+                            $displayImg = "uploads/" . $row['featured_image'];
+                        } else {
+                            // 2. ถ้าไม่มี featured_image ให้ไล่เช็ค image_1 ถึง image_5
+                            for ($i = 1; $i <= 5; $i++) {
+                                $img_col = "image_" . $i;
+                                if (!empty($row[$img_col]) && file_exists($target_dir .$row[$img_col])) {$displayImg = "uploads/" . $row[$img_col];
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    // 3. หากไม่มีรูปในระบบเลย ให้ใช้ รูป Default
-                    if (empty($displayImg)) {
-                        $displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
-                    }
+                        // 3. หากไม่มีรูปในระบบเลย ให้ใช้ รูป Default
+                        if (empty($displayImg)) {$displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+                        }
             ?>
-                <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo $checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo $checkout_time; ?>" 
+                <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo$checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo$checkout_time; ?>" 
                    class="group bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-sm hover:shadow-2xl transition duration-500 overflow-hidden border border-gray-100 flex flex-col h-full">
                     <div class="relative h-60 md:h-72 overflow-hidden bg-gray-100">
                         <img src="<?php echo $displayImg; ?>" alt="<?php echo $raft_name; ?>" class="h-full w-full object-cover transition duration-700 group-hover:scale-110">
@@ -210,13 +211,16 @@ $search_keyword = isset($_GET['search']) ? $conn->real_escape_string(trim($_GET[
                     </div>
                 </a>
             <?php 
-                endwhile;
-            else:
-                echo "<div class='col-span-full py-16 md:py-24 text-center bg-white rounded-[2rem] md:rounded-[3rem] border-2 border-dashed border-gray-200'>
-                        <p class='text-gray-400 text-lg md:text-xl font-bold'>🏜️ ไม่พบแพว่างที่พร้อมให้บริการในขณะนี้</p>
-                        <a href='index.php' class='mt-4 inline-block text-blue-600 font-bold hover:underline italic'>ล้างการค้นหา</a>
-                      </div>";
-            endif; 
+                    endwhile;
+                else:
+                    echo "<div class='col-span-full py-16 md:py-24 text-center bg-white rounded-[2rem] md:rounded-[3rem] border-2 border-dashed border-gray-200'>
+                            <p class='text-gray-400 text-lg md:text-xl font-bold'>🏜️ ไม่พบแพว่างที่พร้อมให้บริการในขณะนี้ (หรือยังไม่ได้เพิ่มข้อมูลแพ)</p>
+                            <a href='index.php' class='mt-4 inline-block text-blue-600 font-bold hover:underline italic'>ล้างการค้นหา</a>
+                          </div>";
+                endif; 
+            } else {
+                echo "<div class='col-span-full py-10 text-center text-red-500 font-bold'>ไม่สามารถเชื่อมต่อฐานข้อมูลได้ กรุณาตั้งค่า DATABASE_URL บน Render</div>";
+            }
             ?>
         </div>
     </main>
