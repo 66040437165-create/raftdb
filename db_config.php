@@ -54,25 +54,25 @@ if (!function_exists('send_line_message')) {
 
         $url = 'https://api.line.me/v2/bot/message/push&#39;;
        
-        // จัดโครงสร้างอาเรย์ให้ถูกต้อง ป้องกัน Syntax Error
-        $data = array(
-            'to' => $target_id,
-            'messages' => array(
-                array(
-                    'type' => 'text',
-                    'text' => $message_text
-                )
-            )
-        );
+        // ใช้ syntax แบบวงเล็บเหลี่ยม [...] ป้องกันปัญหา Unexpected Identifier
+        $data = [
+            "to" => $target_id,
+            "messages" => [
+                [
+                    "type" => "text",
+                    "text" => $message_text
+                ]
+            ]
+        ];
        
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: application/json',
             'Authorization: Bearer ' . LINE_BOT_ACCESS_TOKEN
-        ));
+        ]);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         $result = curl_exec($ch);
         curl_close($ch);
