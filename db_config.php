@@ -33,28 +33,27 @@ if (!$conn) {
 }
 
 // --- ตั้งค่า LINE Login ---
-if (!defined('LINE_CLIENT_ID')) define('LINE_CLIENT_ID', '2010677463');
-if (!defined('LINE_CLIENT_SECRET')) define('LINE_CLIENT_SECRET', '3684f4e6a269259f388538a275957873');
-if (!defined('LINE_REDIRECT_URI')) define('LINE_REDIRECT_URI', $base_url . 'line_callback.php');
+if (!defined("LINE_CLIENT_ID")) define("LINE_CLIENT_ID", "2010677463");
+if (!defined("LINE_CLIENT_SECRET")) define("LINE_CLIENT_SECRET", "3684f4e6a269259f388538a275957873");
+if (!defined("LINE_REDIRECT_URI")) define("LINE_REDIRECT_URI", $base_url . "line_callback.php");
 
 // --- ตั้งค่า LINE Messaging API ---
-if (!defined('LINE_BOT_ACCESS_TOKEN')) define('LINE_BOT_ACCESS_TOKEN', 'C9RIGCTTHW24CjZEyy1glVBPhSLBx15Kb48CQ+qIJX1NZiH3NeQte32Tp1C5zQD2dJIdi8ud55keeFkkcMwlpRsM8CEJHKPiphK1Lzl1NcOQlIyPEdCOjtRpkZYskqbnSDSGiRhCGPM7w3BdJ9ZTXQdB04t89/1O/w1cDnyilFU=');
-if (!defined('LINE_NOTIFY_TARGET_ID')) define('LINE_NOTIFY_TARGET_ID', 'Uc363e24c7774830ce61b1995d0b11e9d');
+if (!defined("LINE_BOT_ACCESS_TOKEN")) define("LINE_BOT_ACCESS_TOKEN", "C9RIGCTTHW24CjZEyy1glVBPhSLBx15Kb48CQ+qIJX1NZiH3NeQte32Tp1C5zQD2dJIdi8ud55keeFkkcMwlpRsM8CEJHKPiphK1Lzl1NcOQlIyPEdCOjtRpkZYskqbnSDSGiRhCGPM7w3BdJ9ZTXQdB04t89/1O/w1cDnyilFU=");
+if (!defined("LINE_NOTIFY_TARGET_ID")) define("LINE_NOTIFY_TARGET_ID", "Uc363e24c7774830ce61b1995d0b11e9d");
 
 /**
  * ฟังก์ชันสำหรับส่งข้อความแจ้งเตือนเข้าสู่ LINE
  */
-if (!function_exists('send_line_message')) {
+if (!function_exists("send_line_message")) {
     function send_line_message($message_text, $custom_target_id = null) {
         $target_id = (!empty($custom_target_id)) ? $custom_target_id : LINE_NOTIFY_TARGET_ID;
 
-        if (LINE_BOT_ACCESS_TOKEN === '' || empty($target_id)) {
+        if (LINE_BOT_ACCESS_TOKEN === "" || empty($target_id)) {
             return false;
         }
 
-        $url = 'https://api.line.me/v2/bot/message/push&#39;;
+        $url = "https://api.line.me/v2/bot/message/push&quot;;
        
-        // ใช้ syntax แบบวงเล็บเหลี่ยม [...] ป้องกันปัญหา Unexpected Identifier
         $data = [
             "to" => $target_id,
             "messages" => [
@@ -69,10 +68,13 @@ if (!function_exists('send_line_message')) {
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+       
+        // แก้ไขเครื่องหมายตรงนี้ให้เป็น Double Quote (") ทั้งหมด
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . LINE_BOT_ACCESS_TOKEN
+            "Content-Type: application/json",
+            "Authorization: Bearer " . LINE_BOT_ACCESS_TOKEN
         ]);
+       
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         $result = curl_exec($ch);
         curl_close($ch);
@@ -82,12 +84,12 @@ if (!function_exists('send_line_message')) {
 
 // Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar)
 $pending_bookings_count = 0;
-if ($conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['role']) && $_SESSION['role'] === 'admin') {
+if ($conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION["role"]) && $_SESSION["role"] === "admin") {
     $res_p = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending'");
     if ($res_p) {
         $row_p = pg_fetch_assoc($res_p);
         if ($row_p) {
-            $pending_bookings_count = $row_p['cnt'];
+            $pending_bookings_count = $row_p["cnt"];
         }
     }
 }
