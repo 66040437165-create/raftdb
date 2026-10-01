@@ -1,6 +1,7 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+
+require_once DIR . '/db_config.php';
 
 // 1. ตรวจสอบว่าล็อกอินแล้วหรือยัง (ทั้ง Admin และ Staff เข้าใช้งาน Dashboard ได้)
 if (!isset($_SESSION['user_id'])) {
