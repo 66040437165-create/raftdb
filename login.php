@@ -1,5 +1,4 @@
 <?php
-// บังคับแสดง Error เพื่อความสะดวกในการตรวจสอบ
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -14,32 +13,26 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     if (!empty($username) && !empty($password)) {
         if ($conn) {
-            // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (PostgreSQL Parameterized Query)
             $query = "SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = $1 LIMIT 1";
             $result = @pg_query_params($conn, $query, array($username));
 
             if ($result) {
                 if ($user = pg_fetch_assoc($result)) {
-                    // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
                     if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
                         $error = "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
                     } else {
-                        // ตรวจสอบรหัสผ่าน รองรับทั้ง plain text และ password_hash
                         $is_valid_pw = ($password === $user['password']) || password_verify($password, $user['password']);
 
                         if ($is_valid_pw) {
-                            // กำหนดค่าลง Session
                             $_SESSION['user_id']   = (int)$user['id'];
                             $_SESSION['username']  = $user['username'];
                             $_SESSION['fullname']  = $user['full_name'];
                             $_SESSION['role_id']   = (int)$user['role_id'];
                             $_SESSION['role']      = ((int)$user['role_id'] === 1) ? 'admin' : 'staff';
 
-                            // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login)
                             $update_query = "UPDATE employees SET last_login = NOW() WHERE id = $1";
                             @pg_query_params($conn, $update_query, array($user['id']));
 
-                            // ส่งตรงไปที่หน้าแดชบอร์ดหลัก
                             header("Location: admin_dashboard.php");
                             exit();
                         } else {
@@ -100,17 +93,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 เข้าสู่ระบบ
             </button>
         </form>
-
-        <div class="relative flex py-5 items-center">
-            <div class="flex-grow border-t border-gray-200"></div>
-            <span class="flex-shrink mx-4 text-gray-400 text-xs">หรือ</span>
-            <div class="flex-grow border-t border-gray-200"></div>
-        </div>
-
-        <a href="line_login.php" class="w-full bg-[#06C755] hover:bg-[#05b04b] text-white font-bold py-3.5 rounded-xl shadow-lg transition duration-300 flex items-center justify-center gap-2">
-            <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M24 10.3c0-4.8-5.4-8.8-12-8.8S0 5.5 0 10.3c0 4.3 4.3 8 10.1 8.7.4.1.9.4.8.8l-.2 1.5c0 .3-.2.8.4.8.5 0 2.5-1.5 3.5-2.6 4.3-.5 9.4-4.2 9.4-8.7zm-14.7 3.5H7.7c-.4 0-.8-.4-.8-.8V8.7c0-.4.4-.8.8-.8s.8.4.8.8v2.7h1.6c.4 0 .8.4.8.8s-.4.8-.8.8zm3.2-.8c0 .4-.4.8-.8.8s-.8-.4-.8-.8V8.7c0-.4.4-.8.8-.8s.8.4.8.8v4.3zm5 0c0 .3-.1.5-.3.6-.1.1-.3.2-.5.2H15c-.4 0-.8-.4-.8-.8V8.7c0-.4.4-.8.8-.8s.8.4.8.8v3.5h1.7c.4 0 .8.4.8.8zm4-2.5c0 .4-.4.8-.8.8h-1.6v.9h1.6c.4 0 .8.4.8.8s-.4.8-.8.8h-2.4c-.4 0-.8-.4-.8-.8V8.7c0-.4.4-.8.8-.8h2.4c.4 0 .8.4.8.8s-.4.8-.8.8h-1.6V10h1.6c.4.1.8.5.8.5z"/></svg>
-            เข้าสู่ระบบด้วย LINE
-        </a>
 
         <div class="mt-8 text-center text-sm">
             <a href="index.php" class="text-gray-400 hover:text-gray-600">← กลับไปหน้าแรก</a>
