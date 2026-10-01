@@ -17,7 +17,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (PostgreSQL Parameterized Query)
             $query = "SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = $1 LIMIT 1";
             $result = @pg_query_params($conn, $query, array($username));
-           
+
             if ($result) {
                 if ($user = pg_fetch_assoc($result)) {
                     // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
