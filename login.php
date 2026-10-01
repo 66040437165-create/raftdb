@@ -1,4 +1,5 @@
 <?php
+// บังคับแสดง Error เพื่อความสะดวกในการตรวจสอบ
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -7,32 +8,38 @@ require_once __DIR__ . '/db_config.php';
 
 $error = "";
 
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $username = trim($_POST['username'] ?? '');
     $password = trim($_POST['password'] ?? '');
 
     if (!empty($username) && !empty($password)) {
         if ($conn) {
+            // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (รองรับ PostgreSQL)
             $query = "SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = $1 LIMIT 1";
             $result = @pg_query_params($conn, $query, array($username));
 
             if ($result) {
                 if ($user = pg_fetch_assoc($result)) {
+                    // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
                     if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
                         $error = "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
                     } else {
+                        // ตรวจสอบรหัสผ่าน รองรับทั้งรหัสธรรมดา และ password_hash
                         $is_valid_pw = ($password === $user['password']) || password_verify($password, $user['password']);
 
                         if ($is_valid_pw) {
+                            // กำหนดค่าลง Session
                             $_SESSION['user_id']   = (int)$user['id'];
                             $_SESSION['username']  = $user['username'];
                             $_SESSION['fullname']  = $user['full_name'];
                             $_SESSION['role_id']   = (int)$user['role_id'];
                             $_SESSION['role']      = ((int)$user['role_id'] === 1) ? 'admin' : 'staff';
 
+                            // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login)
                             $update_query = "UPDATE employees SET last_login = NOW() WHERE id = $1";
                             @pg_query_params($conn, $update_query, array($user['id']));
 
+                            // ส่งไปยังหน้า Dashboard หลังบ้าน
                             header("Location: admin_dashboard.php");
                             exit();
                         } else {
@@ -43,7 +50,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     $error = "ไม่พบชื่อผู้ใช้งานนี้ในระบบ!";
                 }
             } else {
-                $error = "เกิดข้อผิดพลาดในการรันคำสั่ง: " . pg_last_error($conn);
+                $error = "เกิดข้อผิดพลาดในการดึงข้อมูล: " . pg_last_error($conn);
             }
         } else {
             $error = "เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล";
@@ -62,7 +69,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <script src="https://cdn.tailwindcss.com"></script&gt;
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css&quot; rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap&quot; rel="stylesheet">
-    <style>body { font-family: 'Sarabun', sans-serif; }</style>
+    <style>
+        body { font-family: 'Sarabun', sans-serif; }
+    </style>
 </head>
 <body class="bg-gradient-to-br from-blue-500 to-blue-700 min-h-screen flex items-center justify-center p-4">
 
@@ -72,7 +81,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <h2 class="text-2xl font-bold text-gray-800">เข้าสู่ระบบจัดการ</h2>
         </div>
 
-        <?php if(!empty($error)): ?>
+        <?php if (!empty($error)): ?>
             <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-6 rounded text-sm font-bold">
                 <?php echo htmlspecialchars($error); ?>
             </div>
