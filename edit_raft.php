@@ -1,24 +1,27 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
-// 2. ดึงข้อมูลแพตาม id
+// 2. ดึงข้อมูลแพตาม id (PostgreSQL Parameterized Query)
 if (!isset($_GET['id'])) {
     header("Location: manage_rafts.php");
     exit();
 }
 
 $id = intval($_GET['id']);
-$stmt = $conn->prepare("SELECT * FROM rafts WHERE id = ?");
-$stmt->bind_param("i", $id);
-$stmt->execute();
-$raft = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$raft = null;
+
+if ($conn) {
+    $res = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1 LIMIT 1", array($id));
+    if ($res) {
+        $raft = pg_fetch_assoc($res);
+    }
+}
 
 if (!$raft) { 
     header("Location: manage_rafts.php"); 
@@ -30,21 +33,19 @@ if (isset($_GET['delete_slot'])) {
     $slot = intval($_GET['delete_slot']);
     if ($slot >= 1 && $slot <= 5) {
         $col_name = "image_" . $slot;
-        $img_name = $raft[$col_name];
+        $img_name = $raft[$col_name] ?? '';
 
         if (!empty($img_name)) {
             // ลบไฟล์จริงออกจาก Folder
-            $full_path = "../uploads/" . $img_name;
+            $full_path = "uploads/" . $img_name;
             if (file_exists($full_path)) { @unlink($full_path); }
 
             // ถ้ารูปที่ลบตรงกับ featured_image ให้เคลียร์ featured_image ด้วย
-            $update_featured = "";
-            if ($raft['featured_image'] === $img_name) {
-                $update_featured = ", featured_image = ''";
+            if (($raft['featured_image'] ?? '') === $img_name) {
+                @pg_query_params($conn, "UPDATE rafts SET $col_name = '', featured_image = '' WHERE id = $1", array($id));
+            } else {
+                @pg_query_params($conn, "UPDATE rafts SET $col_name = '' WHERE id = $1", array($id));
             }
-
-            // เคลียร์ค่าใน Database
-            $conn->query("UPDATE rafts SET $col_name = '' $update_featured WHERE id = $id");
         }
     }
     header("Location: edit_raft.php?id=" . $id);
@@ -56,13 +57,10 @@ if (isset($_GET['set_featured_slot'])) {
     $slot = intval($_GET['set_featured_slot']);
     if ($slot >= 1 && $slot <= 5) {
         $col_name = "image_" . $slot;
-        $img_name = $raft[$col_name];
+        $img_name = $raft[$col_name] ?? '';
 
         if (!empty($img_name)) {
-            $stmt = $conn->prepare("UPDATE rafts SET featured_image = ? WHERE id = ?");
-            $stmt->bind_param("si", $img_name, $id);
-            $stmt->execute();
-            $stmt->close();
+            @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($img_name, $id));
         }
     }
     header("Location: edit_raft.php?id=" . $id);
@@ -70,8 +68,8 @@ if (isset($_GET['set_featured_slot'])) {
 }
 
 // 5. บันทึกการแก้ไขข้อมูลและอัปโหลดรูปภาพใหม่
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $raft_id = intval($_POST['raft_id']);
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
+    $raft_id = intval($_POST['raft_id'] ?? 0);
     $name = trim($_POST['name'] ?? '');
     $capacity = intval($_POST['capacity'] ?? 0);
     $price_per_day = floatval($_POST['price_per_day'] ?? 0);
@@ -80,16 +78,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $status = $_POST['status'] ?? 'available';
 
     // ดึงข้อมูลรูปภาพปัจจุบันก่อนอัปเดต
-    $current_raft = $conn->query("SELECT * FROM rafts WHERE id = $raft_id")->fetch_assoc();
+    $res_curr = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1", array($raft_id));
+    $current_raft = ($res_curr) ? pg_fetch_assoc($res_curr) : [];
     $image_updates = [];
 
-    $target_dir = "../uploads/";
-    if (!is_dir($target_dir)) { mkdir($target_dir, 0777, true); }
+    $target_dir = "uploads/";
+    if (!is_dir($target_dir)) { @mkdir($target_dir, 0777, true); }
 
     // วนลูปจัดการไฟล์รูปภาพ 5 ช่อง (image_1 - image_5)
     for ($i = 1; $i <= 5; $i++) {
         $input_name = "image_" . $i;
-        if (isset($_FILES[$input_name]) && $_FILES[$input_name]['error'] == 0) {
+        if (isset($_FILES[$input_name]) && $_FILES[$input_name]['error'] === 0) {
             $file_ext = strtolower(pathinfo($_FILES[$input_name]["name"], PATHINFO_EXTENSION));
             if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
                 
@@ -106,25 +105,25 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     }
 
-    // อัปเดตข้อมูลทั่วไป
-    $sql_update = "UPDATE rafts SET name=?, capacity=?, price_per_day=?, price_per_hour=?, description=?, status=? WHERE id=?";
-    $stmt = $conn->prepare($sql_update);
-    $stmt->bind_param("siddssi", $name, $capacity, $price_per_day, $price_per_hour, $description, $status, $raft_id);
-    $stmt->execute();
-    $stmt->close();
+    // อัปเดตข้อมูลทั่วไป (PostgreSQL syntax)
+    $sql_update = "UPDATE rafts SET name=$1, capacity=$2, price_per_day=$3, price_per_hour=$4, description=$5, status=$6 WHERE id=$7";
+    @pg_query_params($conn, $sql_update, array($name, $capacity, $price_per_day, $price_per_hour, $description, $status, $raft_id));
 
     // อัปเดตชื่อไฟล์รูปภาพลงคอลัมน์ image_1 - image_5
     foreach ($image_updates as $col => $filename) {
-        $conn->query("UPDATE rafts SET $col = '$filename' WHERE id = $raft_id");
+        if (preg_match('/^image_[1-5]$/', $col)) {
+            @pg_query_params($conn, "UPDATE rafts SET $col = $1 WHERE id = $2", array($filename, $raft_id));
+        }
     }
 
-    // ตรวจสอบรูปหลัก หากยังไม่มี หรือรูปหลักถูกลบไป ให้ดึงรูปแรกที่มีอยู่ตั้งเป็นรูปหลักอัตโนมัติ
-    $check_raft = $conn->query("SELECT * FROM rafts WHERE id = $raft_id")->fetch_assoc();
+    // ตรวจสอบรูปหลัก หากยังไม่มี ให้ดึงรูปแรกที่มีอยู่ตั้งเป็นรูปหลักอัตโนมัติ
+    $res_check = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1", array($raft_id));
+    $check_raft = ($res_check) ? pg_fetch_assoc($res_check) : [];
     if (empty($check_raft['featured_image'])) {
         for ($i = 1; $i <= 5; $i++) {
             if (!empty($check_raft['image_' . $i])) {
                 $first_img = $check_raft['image_' . $i];
-                $conn->query("UPDATE rafts SET featured_image = '$first_img' WHERE id = $raft_id");
+                @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($first_img, $raft_id));
                 break;
             }
         }
@@ -134,7 +133,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     exit();
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -183,12 +181,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                 <?php for ($i = 1; $i <= 5; $i++): 
                                     $col = "image_" . $i;
                                     $img_name = $raft[$col] ?? '';
-                                    $is_featured = (!empty($img_name) && $raft['featured_image'] === $img_name);
+                                    $is_featured = (!empty($img_name) && ($raft['featured_image'] ?? '') === $img_name);
                                 ?>
                                     <div class="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center gap-4">
                                         <div class="w-full sm:w-28 h-20 shrink-0 bg-gray-200 rounded-xl overflow-hidden relative border border-slate-200">
                                             <?php if (!empty($img_name)): ?>
-                                                <img src="../uploads/<?php echo htmlspecialchars($img_name); ?>" class="w-full h-full object-cover">
+                                                <img src="uploads/<?php echo htmlspecialchars($img_name); ?>" class="w-full h-full object-cover">
                                                 <?php if ($is_featured): ?>
                                                     <span class="absolute top-1 left-1 bg-amber-500 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow">รูปหลัก</span>
                                                 <?php endif; ?>
@@ -275,7 +273,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                         <select name="status" class="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 outline-none font-black text-slate-700 appearance-none cursor-pointer">
                                             <option value="available" <?php if($raft['status'] == 'available') echo 'selected'; ?>>✅ พร้อมเปิดให้จอง (ว่าง)</option>
                                             <option value="busy" <?php if($raft['status'] == 'busy') echo 'selected'; ?>>⏳ กำลังใช้งาน (ไม่ว่าง)</option>
-                                            <!-- 🟢 เพิ่มสถานะ รอตรวจสอบการจอง เข้าไปในฟอร์มแก้ไข -->
                                             <option value="pending" <?php if($raft['status'] == 'pending') echo 'selected'; ?>>🟡 รอตรวจสอบการจอง</option>
                                             <option value="maintenance" <?php if($raft['status'] == 'maintenance') echo 'selected'; ?>>🛠️ ปิดปรับปรุงชั่วคราว</option>
                                         </select>
@@ -300,9 +297,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
-            sidebar.classList.toggle('-translate-x-full');
-            sidebar.classList.toggle('sidebar-active');
-            overlay.classList.toggle('hidden');
+            if (sidebar && overlay) {
+                sidebar.classList.toggle('-translate-x-full');
+                sidebar.classList.toggle('sidebar-active');
+                overlay.classList.toggle('hidden');
+            }
         }
     </script>
 </body>
