@@ -1,6 +1,12 @@
 <?php
 session_start();
-require_once __DIR__ . '/db_config.php';
+
+// รองรับ path ไฟล์ db_config.php ทั้งในโฟลเดอร์เดียวกันและโฟลเดอร์หลัก
+if (file_exists(__DIR__ . '/db_config.php')) {
+    require_once __DIR__ . '/db_config.php';
+} else {
+    require_once __DIR__ . '/../db_config.php';
+}
 
 // 1. ดึงข้อมูลผู้ใช้งาน (ถ้าล็อคอินอยู่)
 $is_logged_in = isset($_SESSION['user_id']);
@@ -8,16 +14,16 @@ $user_id = $is_logged_in ? intval($_SESSION['user_id']) : null;
 $user_fullname = $is_logged_in ? ($_SESSION['fullname'] ?? '') : '';
 $user_tel = '';
 
-if ($is_logged_in) {
+if ($is_logged_in && $conn) {
     $is_admin = isset($_SESSION['role']) && $_SESSION['role'] === 'admin';
     if ($is_admin) {
         $user_fullname = '';
         $user_tel = '';
     } else {
-        // รองรับทั้งคอลัมน์ tel หรือ phone
-        $user_res = $conn->query("SELECT * FROM users WHERE id = $user_id OR user_id = $user_id LIMIT 1");
-        if ($user_res && $user_res->num_rows > 0) {
-            $user_data = $user_res->fetch_assoc();
+        // ดึงข้อมูลผู้ใช้จากตาราง users (PostgreSQL syntax)
+        $user_res = @pg_query_params($conn, "SELECT * FROM users WHERE id = $1 LIMIT 1", array($user_id));
+        if ($user_res && pg_num_rows($user_res) > 0) {
+            $user_data = pg_fetch_assoc($user_res);
             $user_tel = $user_data['tel'] ?? $user_data['phone'] ?? '';
             if (empty($user_fullname)) {
                 $user_fullname = $user_data['fullname'] ?? $user_data['name'] ?? '';
@@ -38,12 +44,14 @@ $checkout_val = $_GET['checkout'] ?? date('Y-m-d', strtotime($checkin_val . ' +1
 $checkin_time_val = $_GET['checkin_time'] ?? '09:00';
 $checkout_time_val = $_GET['checkout_time'] ?? '17:30';
 
-// ดึงข้อมูลแพตาม id จริง
-$stmt = $conn->prepare("SELECT * FROM rafts WHERE id = ?");
-$stmt->bind_param("i", $raft_id);
-$stmt->execute();
-$raft = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+// ดึงข้อมูลแพตาม id (PostgreSQL Parameterized Query)
+$raft = null;
+if ($conn) {
+    $stmt = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1 LIMIT 1", array($raft_id));
+    if ($stmt && pg_num_rows($stmt) > 0) {
+        $raft = pg_fetch_assoc($stmt);
+    }
+}
 
 if (!$raft) { 
     header("Location: index.php"); 
@@ -53,10 +61,10 @@ if (!$raft) {
 // ดึงรูปภาพทั้งหมด (รองรับทั้งตาราง raft_images และ คอลัมน์ image_1 ถึง image_5 ในตาราง rafts)
 $images = [];
 
-// 2.1 ลองดึงจากตาราง raft_images
-$res_imgs = $conn->query("SELECT image_path, is_main FROM raft_images WHERE raft_id = $raft_id ORDER BY is_main DESC");
-if ($res_imgs && $res_imgs->num_rows > 0) {
-    while($img = $res_imgs->fetch_assoc()) {
+// 2.1 ลองดึงจากตาราง raft_images (ถ้ามี)
+$res_imgs = @pg_query_params($conn, "SELECT image_path, is_main FROM raft_images WHERE raft_id = $1 ORDER BY is_main DESC", array($raft_id));
+if ($res_imgs && pg_num_rows($res_imgs) > 0) {
+    while($img = pg_fetch_assoc($res_imgs)) {
         $images[] = $img;
     }
 }
@@ -70,7 +78,10 @@ if (empty($images)) {
     for ($i = 1; $i <= 5; $i++) {
         $col_name = "image_" . $i;
         if (!empty($raft[$col_name])) {
-            $images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+            // ไม่ให้เพิ่มซ้ำกับ featured_image
+            if (empty($images) || $raft[$col_name] !== ($raft['featured_image'] ?? '')) {
+                $images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+            }
         }
     }
 }
@@ -79,10 +90,12 @@ $main_image = !empty($images) ? $images[0]['image_path'] : '';
 
 // 3. ดึงค่าตั้งค่า (เวลาเปิด-ปิด)
 $settings = [];
-$res_settings = $conn->query("SELECT * FROM settings");
-if ($res_settings) {
-    while ($row = $res_settings->fetch_assoc()) {
-        $settings[$row['setting_key']] = $row['setting_value'];
+if ($conn) {
+    $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings");
+    if ($res_settings) {
+        while ($row = pg_fetch_assoc($res_settings)) {
+            $settings[$row['setting_key']] = $row['setting_value'];
+        }
     }
 }
 $open_time = $settings['open_time'] ?? '09:00';
@@ -135,7 +148,7 @@ if (empty($_GET['checkin_time'])) {
                     <div>
                         <span class="bg-blue-600 text-white text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest mb-2 inline-block shadow-lg shadow-blue-500/30">ยืนยันการจอง</span>
                         <h1 class="text-3xl font-black text-white"><?php echo htmlspecialchars($raft['name']); ?></h1>
-                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $raft['capacity']; ?> ท่าน</p>
+                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo htmlspecialchars($raft['capacity']); ?> ท่าน</p>
                     </div>
                 </div>
             </div>
@@ -166,8 +179,8 @@ if (empty($_GET['checkin_time'])) {
             <input type="hidden" id="price_per_hour" value="<?php echo isset($raft['price_per_hour']) ? $raft['price_per_hour'] : 0; ?>">
             <input type="hidden" name="total_price" id="total_price_input" value="<?php echo $raft['price_per_day']; ?>">
             
-            <input type="hidden" id="setting_open_time" value="<?php echo $open_time; ?>">
-            <input type="hidden" id="setting_close_time" value="<?php echo $close_time; ?>">
+            <input type="hidden" id="setting_open_time" value="<?php echo htmlspecialchars($open_time); ?>">
+            <input type="hidden" id="setting_close_time" value="<?php echo htmlspecialchars($close_time); ?>">
 
             <div class="space-y-8">
                 <!-- Section 1: Guest Information -->
@@ -244,7 +257,7 @@ if (empty($_GET['checkin_time'])) {
                         <!-- Checkout Section (Dynamic) -->
                         <div id="checkout_section" class="grid grid-cols-2 gap-4 hidden">
                             <div class="col-start-2 space-y-2">
-                                <label class="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 text-rose-500">เวลาเช็คเอาท์</label>
+                                <label class="block text-[10px] font-black uppercase tracking-widest ml-1 text-rose-500">เวลาเช็คเอาท์</label>
                                 <input type="time" name="check_out_time" id="check_out_time" onchange="calculatePrice()"
                                        class="w-full h-12 px-4 bg-rose-50/50 border-2 border-transparent focus:border-rose-500 focus:bg-white rounded-2xl outline-none font-bold text-rose-700 transition">
                             </div>
@@ -253,7 +266,7 @@ if (empty($_GET['checkin_time'])) {
                 </div>
 
                 <input type="hidden" name="check_out" id="check_out_date_hidden" value="<?php echo $checkout_val; ?>">
-                <input type="hidden" name="check_out_time_hidden" id="check_out_time_hidden" value="17:30">
+                <input type="hidden" name="check_out_time_hidden" id="check_out_time_hidden" value="<?php echo htmlspecialchars($close_time); ?>">
 
                 <!-- Section 3: Pricing Summary -->
                 <div class="pt-2">
@@ -262,7 +275,7 @@ if (empty($_GET['checkin_time'])) {
                         <div class="relative z-10 flex justify-between items-center text-white">
                             <div class="text-left">
                                 <p class="text-[10px] text-blue-200 bg-black/10 px-3 py-2 rounded-xl border border-white/10 backdrop-blur-sm" id="price_note">
-                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo $open_time; ?> - <?php echo $close_time; ?> น.
+                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo htmlspecialchars($open_time); ?> - <?php echo htmlspecialchars($close_time); ?> น.
                                 </p>
                             </div>
                             <div class="text-right">
@@ -346,11 +359,13 @@ if (empty($_GET['checkin_time'])) {
 
                         if (checkInTime && checkOutTime) {
                             const today = new Date().toISOString().split('T')[0];
-                            const start = new Date(today + " " + checkInTime);
-                            const end = new Date(today + " " + checkOutTime);
+                            const start = new Date(today + "T" + checkInTime);
+                            const end = new Date(today + "T" + checkOutTime);
                             
                             let diffMs = end - start;
-                            if (diffMs <= 0) { diffMs += 24 * 60 * 60 * 1000; }
+                            if (diffMs <= 0) { 
+                                diffMs += 24 * 60 * 60 * 1000; 
+                            }
 
                             const diffHrs = Math.ceil(diffMs / (1000 * 60 * 60));
                             const total = diffHrs * pricePerHour;
@@ -399,7 +414,7 @@ if (empty($_GET['checkin_time'])) {
         <!-- Bottom Thumbnail Strip inside Lightbox -->
         <?php if(count($images) > 1): ?>
             <div class="flex justify-center gap-2 overflow-x-auto py-2 no-scrollbar max-w-full">
-                <?php foreach($images as $idx => $img): ?>
+                <?php foreach($images as $idx =>$img): ?>
                     <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
                          onclick="setLightboxImage(<?php echo $idx; ?>)"
                          class="lightbox-thumb-item w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl border-2 cursor-pointer transition opacity-50 hover:opacity-100 shrink-0" 
@@ -412,8 +427,8 @@ if (empty($_GET['checkin_time'])) {
     <script>
         const galleryImages = <?php 
             $js_imgs = [];
-            foreach($images as $i) { 
-                $js_imgs[] = 'uploads/' . $i['image_path']; 
+            foreach($images as$i) { 
+                $js_imgs[] = 'uploads/' .$i['image_path']; 
             }
             echo json_encode(!empty($js_imgs) ? $js_imgs : ["uploads/" . $main_image]); 
         ?>;
