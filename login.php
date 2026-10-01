@@ -14,17 +14,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     if (!empty($username) && !empty($password)) {
         if ($conn) {
-            // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (ปรับใช้ PostgreSQL Parameterized Query)
+            // ดึงข้อมูลพนักงานจากตาราง employees ตาม username (PostgreSQL Parameterized Query)
             $query = "SELECT id, username, password, full_name, role_id, is_active FROM employees WHERE username = $1 LIMIT 1";
             $result = @pg_query_params($conn, $query, array($username));
-            
+           
             if ($result) {
                 if ($user = pg_fetch_assoc($result)) {
                     // เช็คสถานะการใช้งาน (0 = ระงับการใช้งาน)
                     if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
                         $error = "บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ";
                     } else {
-                        // ตรวจสอบรหัสผ่าน รองรับทั้งรหัสผ่านธรรมดา (plain text) และ password_hash
+                        // ตรวจสอบรหัสผ่าน รองรับทั้ง plain text และ password_hash
                         $is_valid_pw = ($password === $user['password']) || password_verify($password, $user['password']);
 
                         if ($is_valid_pw) {
@@ -35,12 +35,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                             $_SESSION['role_id']   = (int)$user['role_id'];
                             $_SESSION['role']      = ((int)$user['role_id'] === 1) ? 'admin' : 'staff';
 
-                            // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login) ด้วย PostgreSQL syntax
+                            // บันทึกเวลาเข้าสู่ระบบล่าสุด (last_login)
                             $update_query = "UPDATE employees SET last_login = NOW() WHERE id = $1";
                             @pg_query_params($conn, $update_query, array($user['id']));
 
-                            // ทั้ง Admin และ Staff ให้เข้าสู่ Dashboard หลังบ้าน
-                            header("Location: backend/admin_dashboard.php");
+                            // ส่งตรงไปที่หน้าแดชบอร์ดหลัก
+                            header("Location: admin_dashboard.php");
                             exit();
                         } else {
                             $error = "รหัสผ่านไม่ถูกต้อง!";
@@ -66,8 +66,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>เข้าสู่ระบบ - ChillRaft</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script&gt;
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css&quot; rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap&quot; rel="stylesheet">
     <style>body { font-family: 'Sarabun', sans-serif; }</style>
 </head>
 <body class="bg-gradient-to-br from-blue-500 to-blue-700 min-h-screen flex items-center justify-center p-4">
