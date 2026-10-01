@@ -1,46 +1,58 @@
-
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+
+// รองรับทั้งกรณีไฟล์อยู่ใน root หรืออยู่ในโฟลเดอร์ย่อย (เช่น admin/)
+if (file_exists(__DIR__ . '/db_config.php')) {
+    require_once __DIR__ . '/db_config.php';
+} else {
+    require_once __DIR__ . '/../db_config.php';
+}
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    $login_path = file_exists(__DIR__ . '/login.php') ? 'login.php' : '../login.php';
+    header("Location: " . $login_path);
     exit();
 }
 
 $msg = '';
 
-// ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings
+// 1. ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings (PostgreSQL Syntax)
 $b_cols = [];
-$chk_cols = $conn->query("SHOW COLUMNS FROM bookings");
-if ($chk_cols) {
-    while ($c = $chk_cols->fetch_assoc()) {
-        $b_cols[] = strtolower($c['Field']);
+if ($conn) {
+    $chk_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
+    if ($chk_cols) {
+        while ($c = pg_fetch_assoc($chk_cols)) {
+            $b_cols[] = strtolower($c['column_name']);
+        }
     }
 }
 
-// ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง customers
+// ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง customers (PostgreSQL Syntax)
 $c_cols = [];
-$chk_c_cols = $conn->query("SHOW COLUMNS FROM customers");
-if ($chk_c_cols) {
-    while ($c = $chk_c_cols->fetch_assoc()) {
-        $c_cols[] = strtolower($c['Field']);
+if ($conn) {
+    $chk_c_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'customers'");
+    if ($chk_c_cols) {
+        while ($c = pg_fetch_assoc($chk_c_cols)) {
+            $c_cols[] = strtolower($c['column_name']);
+        }
     }
 }
 
 // ดึงเวลาเปิด-ปิดจากตั้งค่าระบบ
 $open_time = '09:00';
 $close_time = '17:30';
-$res_settings = $conn->query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('open_time','close_time')");
-if ($res_settings) {
-    while ($s = $res_settings->fetch_assoc()) {
-        if ($s['setting_key'] === 'open_time') $open_time = $s['setting_value'];
-        if ($s['setting_key'] === 'close_time') $close_time = $s['setting_value'];
+if ($conn) {
+    $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('open_time','close_time')");
+    if ($res_settings) {
+        while ($s = pg_fetch_assoc($res_settings)) {
+            if ($s['setting_key'] === 'open_time') $open_time = $s['setting_value'];
+            if ($s['setting_key'] === 'close_time') $close_time = $s['setting_value'];
+        }
     }
 }
 
 // 2. จัดการบันทึกข้อมูลใหม่ (POST)
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $guest_name     = trim($_POST['guest_name'] ?? '');
     $guest_tel      = trim($_POST['guest_tel'] ?? '');
     $guest_email    = trim($_POST['guest_email'] ?? '');
@@ -61,149 +73,128 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     ];
     $status_id = $status_map[$status] ?? 1;
 
-    $conn->begin_transaction();
+    // เริ่มต้น Transaction บน PostgreSQL
+    @pg_query($conn, "BEGIN");
+
     try {
         // สร้างหรือค้นหา customer
         $customer_id = 0;
         if (!empty($guest_name) && !empty($guest_tel)) {
             // ตรวจสอบว่ามีลูกค้าเบอร์นี้แล้วหรือยัง
-            $stmt_find = $conn->prepare("SELECT id FROM customers WHERE phone = ? LIMIT 1");
-            $stmt_find->bind_param("s", $guest_tel);
-            $stmt_find->execute();
-            $res_find = $stmt_find->get_result();
+            $res_find = @pg_query_params($conn, "SELECT id FROM customers WHERE phone = $1 LIMIT 1", array($guest_tel));
             
-            if ($res_find && $res_find->num_rows > 0) {
-                $customer_id = intval($res_find->fetch_assoc()['id']);
-                // อัปเดตชื่อ
-                $stmt_uc = $conn->prepare("UPDATE customers SET full_name = ? WHERE id = ?");
-                $stmt_uc->bind_param("si", $guest_name, $customer_id);
-                $stmt_uc->execute();
-                $stmt_uc->close();
+            if ($res_find && pg_num_rows($res_find) > 0) {
+                $cust = pg_fetch_assoc($res_find);
+                $customer_id = intval($cust['id']);
+                // อัปเดตชื่อลูกค้า
+                @pg_query_params($conn, "UPDATE customers SET full_name = $1 WHERE id = $2", array($guest_name, $customer_id));
             } else {
-                // สร้างลูกค้าใหม่
+                // สร้างลูกค้าใหม่ และใช้ RETURNING id เพื่อดึง id ล่าสุด
                 $ins_fields = ["full_name", "phone"];
-                $ins_vals   = [$guest_name, $guest_tel];
-                $ins_types  = "ss";
-                $ins_placeholders = ["?", "?"];
+                $ins_placeholders = ["$1", "$2"];
+                $ins_vals = [$guest_name, $guest_tel];
+                $p_idx = 3;
 
                 if (!empty($guest_email) && in_array('email', $c_cols)) {
                     $ins_fields[] = "email";
+                    $ins_placeholders[] = "$" . $p_idx++;
                     $ins_vals[] = $guest_email;
-                    $ins_types .= "s";
-                    $ins_placeholders[] = "?";
                 }
 
-                $sql_ins_c = "INSERT INTO customers (" . implode(", ", $ins_fields) . ") VALUES (" . implode(", ", $ins_placeholders) . ")";
-                $stmt_ins_c = $conn->prepare($sql_ins_c);
-                $stmt_ins_c->bind_param($ins_types, ...$ins_vals);
-                $stmt_ins_c->execute();
-                $customer_id = $conn->insert_id;
-                $stmt_ins_c->close();
+                $sql_ins_c = "INSERT INTO customers (" . implode(", ", $ins_fields) . ") VALUES (" . implode(", ", $ins_placeholders) . ") RETURNING id";
+                $res_ins_c = @pg_query_params($conn, $sql_ins_c, $ins_vals);
+                if ($res_ins_c && $row_ins_c = pg_fetch_assoc($res_ins_c)) {
+                    $customer_id = intval($row_ins_c['id']);
+                }
             }
-            $stmt_find->close();
         }
 
         // สร้าง booking code อัตโนมัติ
         $booking_code = 'BK' . date('ymd') . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
 
-        // เตรียมฟิลด์สำหรับ INSERT
+        // เตรียมฟิลด์สำหรับ INSERT bookings แบบระบุ Parameter ($1, $2, ...)
         $fields = [];
         $placeholders = [];
         $params = [];
-        $types = "";
+        $param_idx = 1;
 
         if (in_array('booking_code', $b_cols)) {
             $fields[] = "booking_code";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $booking_code;
-            $types .= "s";
         }
         if (in_array('customer_id', $b_cols) && $customer_id > 0) {
             $fields[] = "customer_id";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $customer_id;
-            $types .= "i";
         }
         if (in_array('raft_id', $b_cols)) {
             $fields[] = "raft_id";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $raft_id;
-            $types .= "i";
         }
         if (in_array('guest_name', $b_cols)) {
             $fields[] = "guest_name";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $guest_name;
-            $types .= "s";
         }
         if (in_array('guest_tel', $b_cols)) {
             $fields[] = "guest_tel";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $guest_tel;
-            $types .= "s";
         }
         if (in_array('guest_email', $b_cols)) {
             $fields[] = "guest_email";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $guest_email;
-            $types .= "s";
         }
         if (in_array('check_in_date', $b_cols)) {
             $fields[] = "check_in_date";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $check_in_date;
-            $types .= "s";
         }
         if (in_array('check_in_time', $b_cols)) {
             $fields[] = "check_in_time";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $check_in_time;
-            $types .= "s";
         }
         if (in_array('check_out_date', $b_cols)) {
             $fields[] = "check_out_date";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $check_out_date;
-            $types .= "s";
         }
         if (in_array('check_out_time', $b_cols)) {
             $fields[] = "check_out_time";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $check_out_time;
-            $types .= "s";
         }
         if (in_array('num_guests', $b_cols)) {
             $fields[] = "num_guests";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $num_guests;
-            $types .= "i";
         }
 
         // ราคา
         if (in_array('raft_price', $b_cols)) {
             $fields[] = "raft_price";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $total_price;
-            $types .= "d";
         } elseif (in_array('total_price', $b_cols)) {
             $fields[] = "total_price";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $total_price;
-            $types .= "d";
         }
 
         // สถานะ
         if (in_array('status_id', $b_cols)) {
             $fields[] = "status_id";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $status_id;
-            $types .= "i";
         }
         if (in_array('status', $b_cols)) {
             $fields[] = "status";
-            $placeholders[] = "?";
+            $placeholders[] = '$' . $param_idx++;
             $params[] = $status;
-            $types .= "s";
         }
 
         // วันที่สร้าง
@@ -214,42 +205,43 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         if (!empty($fields)) {
             $sql_ins = "INSERT INTO bookings (" . implode(", ", $fields) . ") VALUES (" . implode(", ", $placeholders) . ")";
-            $stmt_ins = $conn->prepare($sql_ins);
-            if ($stmt_ins) {
-                if (!empty($types)) {
-                    $stmt_ins->bind_param($types, ...$params);
-                }
-                if ($stmt_ins->execute()) {
-                    // อัปเดตสถานะแพ
-                    if ($raft_id > 0 && $status === 'confirmed') {
-                        $conn->query("UPDATE rafts SET status = 'busy' WHERE id = $raft_id");
-                    }
+            $result_ins = @pg_query_params($conn, $sql_ins, $params);
 
-                    $conn->commit();
-                    header("Location: manage_bookings.php?msg=added");
-                    exit();
-                } else {
-                    $msg = 'error_insert';
+            if ($result_ins) {
+                // อัปเดตสถานะแพเมื่อสถานะเป็นการยืนยันแล้ว
+                if ($raft_id > 0 && $status === 'confirmed') {
+                    @pg_query_params($conn, "UPDATE rafts SET status = 'busy' WHERE id = $1", array($raft_id));
                 }
-                $stmt_ins->close();
+
+                @pg_query($conn, "COMMIT");
+                header("Location: manage_bookings.php?msg=added");
+                exit();
             } else {
+                @pg_query($conn, "ROLLBACK");
                 $msg = 'error_insert';
             }
         } else {
+            @pg_query($conn, "ROLLBACK");
             $msg = 'error_insert';
         }
 
-        $conn->rollback();
     } catch (Exception $e) {
-        $conn->rollback();
+        @pg_query($conn, "ROLLBACK");
         $msg = 'error_insert';
     }
 }
 
-// 3. ดึงข้อมูลแพทั้งหมดเพื่อใส่ Dropdown (เฉพาะแพที่ว่าง)
-$rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts ORDER BY id ASC");
+// 3. ดึงข้อมูลแพทั้งหมดเพื่อใส่ Dropdown (PostgreSQL)
+$rafts = [];
+if ($conn) {
+    $res_rafts = @pg_query($conn, "SELECT id, name, price_per_day, status FROM rafts ORDER BY id ASC");
+    if ($res_rafts) {
+        while ($r = pg_fetch_assoc($res_rafts)) {
+            $rafts[] = $r;
+        }
+    }
+}
 ?>
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -259,7 +251,6 @@ $rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts 
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
         body { font-family: 'Sarabun', sans-serif; }
         .sidebar-active { transform: translateX(0) !important; }
@@ -338,15 +329,15 @@ $rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts 
                                 <select name="raft_id" id="raftSelect" required onchange="updatePrice()"
                                         class="w-full p-3.5 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-slate-800 transition">
                                     <option value="">-- เลือกแพ --</option>
-                                    <?php if($rafts_result && $rafts_result->num_rows > 0): while($r = $rafts_result->fetch_assoc()): ?>
-                                        <option value="<?php echo $r['id']; ?>"
-                                                data-price="<?php echo $r['price_per_day']; ?>"
+                                    <?php foreach ($rafts as $r): ?>
+                                        <option value="<?php echo htmlspecialchars($r['id']); ?>"
+                                                data-price="<?php echo htmlspecialchars($r['price_per_day']); ?>"
                                                 <?php echo ($r['status'] ?? '') === 'busy' ? 'class="text-rose-400"' : ''; ?>>
                                             ⛵ <?php echo htmlspecialchars($r['name']); ?>
                                             (฿<?php echo number_format($r['price_per_day']); ?>/วัน)
                                             <?php echo ($r['status'] ?? '') === 'busy' ? ' — 🔴 ไม่ว่าง' : ' — 🟢 ว่าง'; ?>
                                         </option>
-                                    <?php endwhile; endif; ?>
+                                    <?php endforeach; ?>
                                 </select>
                             </div>
 
@@ -368,7 +359,7 @@ $rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts 
                             <div class="space-y-1">
                                 <label class="block text-xs font-bold text-slate-600">เวลาเช็คอิน <span class="text-rose-500">*</span></label>
                                 <input type="time" name="check_in_time" required
-                                       value="<?php echo $open_time; ?>"
+                                       value="<?php echo htmlspecialchars($open_time); ?>"
                                        class="w-full p-3.5 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-slate-800 transition">
                             </div>
 
@@ -382,7 +373,7 @@ $rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts 
                             <div class="space-y-1">
                                 <label class="block text-xs font-bold text-slate-600">เวลาเช็คเอาท์ <span class="text-rose-500">*</span></label>
                                 <input type="time" name="check_out_time" required
-                                       value="<?php echo $close_time; ?>"
+                                       value="<?php echo htmlspecialchars($close_time); ?>"
                                        class="w-full p-3.5 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-slate-800 transition">
                             </div>
                         </div>
@@ -443,28 +434,35 @@ $rafts_result = $conn->query("SELECT id, name, price_per_day, status FROM rafts 
             calcPrice();
         }
 
-        // คำนวณราคาอัตโนมัติจากแพที่เลือก x จำนวนวัน
         function updatePrice() {
             calcPrice();
         }
 
+        // คำนวณราคาอัตโนมัติจากแพที่เลือก x จำนวนวัน (แก้ไขจุดคำนวณวัน)
         function calcPrice() {
             const select = document.getElementById('raftSelect');
             const option = select.options[select.selectedIndex];
             if (!option || !option.value) return;
 
             const pricePerDay = parseFloat(option.dataset.price || 0);
-            const inDate = new Date(document.getElementById('checkInDate').value);
-            const outDate = new Date(document.getElementById('checkOutDate').value);
+            const inDateVal = document.getElementById('checkInDate').value;
+            const outDateVal = document.getElementById('checkOutDate').value;
 
-            let days = Math.round((outDate - inDate) / (1000 * 60 * 60 * 24));
-            if (days < 1) days = 1;
+            if (!inDateVal || !outDateVal) return;
+
+            const inDate = new Date(inDateVal);
+            const outDate = new Date(outDateVal);
+
+            const diffTime = outDate.getTime() - inDate.getTime();
+            let days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+            if (isNaN(days) || days < 1) {
+                days = 1;
+            }
 
             const total = pricePerDay * days;
             document.getElementById('totalPrice').value = total.toFixed(2);
         }
 
-        // Init
         document.addEventListener('DOMContentLoaded', function() {
             syncDates();
         });
