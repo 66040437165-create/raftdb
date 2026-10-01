@@ -1,36 +1,44 @@
 <?php 
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
 $error_msg = "";
 
-// ดึงรายการประเภทแพสำหรับใส่ Dropdown
-$raft_types = $conn->query("SELECT * FROM raft_types ORDER BY id ASC");
+// ดึงรายการประเภทแพสำหรับใส่ Dropdown (PostgreSQL)
+$raft_types = [];
+if ($conn) {
+    $res_types = @pg_query($conn, "SELECT * FROM raft_types ORDER BY id ASC");
+    if ($res_types) {
+        while ($t = pg_fetch_assoc($res_types)) {
+            $raft_types[] =$t;
+        }
+    }
+}
 
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $name         = trim($_POST['name'] ?? '');
     $raft_type_id = intval($_POST['raft_type_id'] ?? 0);
     $capacity     = intval($_POST['capacity'] ?? 0);
     $price_day    = floatval($_POST['price_per_day'] ?? 0);
     $price_hour   = isset($_POST['price_per_hour']) && $_POST['price_per_hour'] !== '' ? floatval($_POST['price_per_hour']) : 0;
     
-    $status       = trim($_POST['status'] ?? 'available'); // รับค่าสถานะจากฟอร์ม
+    $status       = trim($_POST['status'] ?? 'available');
     $desc         = trim($_POST['description'] ?? '');
 
     // สร้างรหัสแพอัตโนมัติ
     $raft_code    = 'RAFT-' . date('ym') . rand(100, 999);
 
-    if (!empty($name) && $raft_type_id > 0 && $capacity > 0 && $price_day > 0) {
+    if (!empty($name) &&$raft_type_id > 0 && $capacity > 0 &&$price_day > 0) {
         
         // 2. จัดการอัปโหลดรูปภาพ
-        $target_dir = "../uploads/";
+        $target_dir = "uploads/";
         if (!is_dir($target_dir)) { 
-            mkdir($target_dir, 0777, true); 
+            @mkdir($target_dir, 0777, true); 
         }
 
         $featured_image = "";
@@ -38,20 +46,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $img_index = 0;
 
         if (!empty($_FILES['raft_images']['name'][0])) {
-            foreach ($_FILES['raft_images']['name'] as $key => $val) {
-                if ($img_index >= 5) break; // จำกัดสูงสุดแค่ 5 รูป ตามหน้า edit_raft.php
+            foreach ($_FILES['raft_images']['name'] as $key =>$val) {
+                if ($img_index >= 5) break; // จำกัดสูงสุดแค่ 5 รูป
                 
-                if ($_FILES['raft_images']['error'][$key] == 0) {
-                    $file_ext = strtolower(pathinfo($_FILES["raft_images"]["name"][$key], PATHINFO_EXTENSION));
+                if ($_FILES['raft_images']['error'][$key] === 0) {$file_ext = strtolower(pathinfo($_FILES["raft_images"]["name"][$key], PATHINFO_EXTENSION));
                     if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
                         $image_name = "raft_" . time() . "_" . rand(100, 999) . "." . $file_ext;
-                        $target_file = $target_dir . $image_name;
+                        $target_file = $target_dir .$image_name;
 
-                        if (move_uploaded_file($_FILES["raft_images"]["tmp_name"][$key], $target_file)) {
+                        if (move_uploaded_file($_FILES["raft_images"]["tmp_name"][$key],$target_file)) {
                             if (empty($featured_image)) {
-                                $featured_image = $image_name; // รูปแรกเป็นรูปหลัก
+                                $featured_image =$image_name; // รูปแรกเป็นรูปหลัก
                             }
-                            $images[$img_index] = $image_name; // เก็บชื่อรูปลง array
+                            $images[$img_index] =$image_name;
                             $img_index++;
                         }
                     }
@@ -59,23 +66,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
         }
 
-        // 3. บันทึกข้อมูลลงตาราง rafts (รวม image_1 ถึง image_5 เพื่อให้ซิงค์กับระบบ Edit)
-        $stmt = $conn->prepare("INSERT INTO rafts (raft_code, name, raft_type_id, capacity, price_per_day, price_per_hour, description, status, is_active, featured_image, image_1, image_2, image_3, image_4, image_5) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)");
-        
-        if ($stmt) {
-            $stmt->bind_param("ssiiddssssssss", $raft_code, $name, $raft_type_id, $capacity, $price_day, $price_hour, $desc, $status, $featured_image, $images[0], $images[1], $images[2], $images[3], $images[4]);
+        // 3. บันทึกข้อมูลลงตาราง rafts (PostgreSQL syntax)
+        $sql_insert = "INSERT INTO rafts (
+            raft_code, name, raft_type_id, capacity, price_per_day, price_per_hour, 
+            description, status, is_active, featured_image, image_1, image_2, image_3, image_4, image_5
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14
+        )";
 
-            if ($stmt->execute()) {
-                $stmt->close();
-                header("Location: manage_rafts.php?msg=added");
-                exit();
-            } else {
-                $error_msg = "เกิดข้อผิดพลาดในการบันทึกข้อมูล: " . $stmt->error;
-                $stmt->close();
-            }
+        $params = array(
+            $raft_code,$name,
+            $raft_type_id,$capacity,
+            $price_day,$price_hour,
+            $desc,$status,
+            $featured_image,$images[0],
+            $images[1],$images[2],
+            $images[3],$images[4]
+        );
+
+        $result_insert = @pg_query_params($conn, $sql_insert,$params);
+
+        if ($result_insert) {
+            header("Location: manage_rafts.php?msg=added");
+            exit();
         } else {
-            $error_msg = "เตรียมคำสั่ง SQL ไม่สำเร็จ: " . $conn->error;
+            $error_msg = "เกิดข้อผิดพลาดในการบันทึกข้อมูล: " . pg_last_error($conn);
         }
 
     } else {
@@ -98,7 +113,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden lg:hidden" onclick="toggleSidebar()"></div>
 
-    <!-- เรียกใช้ Sidebar ที่ถูกต้อง -->
+    <!-- เรียกใช้ Sidebar -->
     <?php include 'sidebar.php'; ?>
 
     <main class="flex-grow flex flex-col min-w-0">
@@ -141,9 +156,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">ประเภทแพ <span class="text-rose-500">*</span></label>
                         <select name="raft_type_id" required class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 font-bold transition">
                             <option value="">-- เลือกประเภทแพ --</option>
-                            <?php if ($raft_types && $raft_types->num_rows > 0): while($t = $raft_types->fetch_assoc()): ?>
-                                <option value="<?php echo $t['id']; ?>"><?php echo htmlspecialchars($t['name'] ?? $t['type_name']); ?></option>
-                            <?php endwhile; endif; ?>
+                            <?php foreach ($raft_types as$t): ?>
+                                <option value="<?php echo htmlspecialchars($t['id']); ?>">
+                                    <?php echo htmlspecialchars($t['name'] ?? $t['type_name'] ?? ('ประเภทที่ ' . $t['id'])); ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     
@@ -172,7 +189,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                 <select name="status" required class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 font-bold transition appearance-none cursor-pointer">
                                     <option value="available">✅ พร้อมเปิดให้จอง (ว่าง)</option>
                                     <option value="busy">⏳ กำลังใช้งาน (ไม่ว่าง)</option>
-                                    <!-- 🟢 เพิ่มสถานะ รอตรวจสอบ -->
                                     <option value="pending">🟡 รอตรวจสอบการจอง</option>
                                     <option value="maintenance">🛠️ ปิดปรับปรุงชั่วคราว</option>
                                 </select>
@@ -244,7 +260,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 
                 container.classList.remove('hidden');
                 
-                // วนลูปแสดงตัวอย่างรูป (สูงสุด 5 รูป)
                 Array.from(input.files).slice(0, 5).forEach((file, index) => {
                     const reader = new FileReader();
                     reader.onload = function(e) {
