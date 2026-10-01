@@ -1,96 +1,127 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
 // 2. ระบบสลับสถานะ (Quick Toggle Status)
 if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
     $id = intval($_GET['change_status']);
-    $val = $conn->real_escape_string($_GET['new_val']);
-    $conn->query("UPDATE rafts SET status = '$val' WHERE id = $id");
+    $val = trim($_GET['new_val']);
+    if ($conn) {
+        @pg_query_params($conn, "UPDATE rafts SET status = $1 WHERE id = $2", array($val, $id));
+    }
     header("Location: manage_rafts.php");
     exit();
 }
 
-// 3. ระบบลบข้อมูลแพ (อัปเดตการลบไฟล์รูปภาพจากคอลัมน์ image_1 - image_5)
+// 3. ระบบลบข้อมูลแพ
 if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
-    $conn->begin_transaction();
-    try {
-        // 3.1 ดึงรูปสลิปการจองเพื่อลบไฟล์
-        $res_slips = $conn->query("SELECT slip_image FROM bookings WHERE raft_id = $delete_id");
-        if ($res_slips) {
-            while ($slip = $res_slips->fetch_assoc()) {
-                if (!empty($slip['slip_image'])) { @unlink("../uploads/slips/" . $slip['slip_image']); }
+    if ($conn) {
+        @pg_query($conn, "BEGIN");
+        try {
+            // 3.1 ดึงรูปสลิปการจองเพื่อลบไฟล์
+            $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
+            if ($res_slips) {
+                while ($slip = pg_fetch_assoc($res_slips)) {
+                    if (!empty($slip['slip_image'])) { @unlink("uploads/slips/" . $slip['slip_image']); }
+                }
             }
-        }
-        
-        // 3.2 ดึงรูปภาพจากตาราง rafts (featured_image และ image_1 ถึง image_5) เพื่อลบไฟล์
-        $res_raft_imgs = $conn->query("SELECT featured_image, image_1, image_2, image_3, image_4, image_5 FROM rafts WHERE id = $delete_id");
-        if ($res_raft_imgs && $r_img = $res_raft_imgs->fetch_assoc()) {
-            if (!empty($r_img['featured_image'])) { @unlink("../uploads/" . $r_img['featured_image']); }
-            for ($i = 1; $i <= 5; $i++) {
-                $col_name = "image_" . $i;
-                if (!empty($r_img[$col_name])) { @unlink("../uploads/" . $r_img[$col_name]); }
+            
+            // 3.2 ดึงรูปภาพจากตาราง rafts (featured_image และ image_1 ถึง image_5) เพื่อลบไฟล์
+            $res_raft_imgs = @pg_query_params($conn, "SELECT featured_image, image_1, image_2, image_3, image_4, image_5 FROM rafts WHERE id = $1", array($delete_id));
+            if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
+                if (!empty($r_img['featured_image'])) { @unlink("uploads/" . $r_img['featured_image']); }
+                for ($i = 1; $i <= 5; $i++) {
+                    $col_name = "image_" . $i;
+                    if (!empty($r_img[$col_name])) { @unlink("uploads/" . $r_img[$col_name]); }
+                }
             }
-        }
 
-        // 3.3 รองรับการลบรูปจากตารางย่อย raft_images (ถ้ายังมีใช้อยู่)
-        $res_imgs = $conn->query("SELECT image_path FROM raft_images WHERE raft_id = $delete_id");
-        if ($res_imgs) {
-            while ($img = $res_imgs->fetch_assoc()) {
-                if (!empty($img['image_path'])) { @unlink("../uploads/" . $img['image_path']); }
+            // 3.3 รองรับการลบรูปจากตารางย่อย raft_images (ถ้ามี)
+            $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
+            $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
+            if ($has_tbl) {
+                $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
+                if ($res_imgs) {
+                    while ($img = pg_fetch_assoc($res_imgs)) {
+                        if (!empty($img['image_path'])) { @unlink("uploads/" . $img['image_path']); }
+                    }
+                    @pg_query_params($conn, "DELETE FROM raft_images WHERE raft_id = $1", array($delete_id));
+                }
             }
-            $conn->query("DELETE FROM raft_images WHERE raft_id = $delete_id");
-        }
 
-        // 3.4 ลบข้อมูลจากฐานข้อมูล
-        $conn->query("DELETE FROM bookings WHERE raft_id = $delete_id");
-        $conn->query("DELETE FROM rafts WHERE id = $delete_id");
-        $conn->commit();
-        header("Location: manage_rafts.php?msg=deleted");
-        exit();
-    } catch (mysqli_sql_exception $exception) {
-        $conn->rollback();
-        echo "เกิดข้อผิดพลาด: " . $exception->getMessage();
+            // 3.4 ลบข้อมูลจากตาราง bookings และ rafts
+            @pg_query_params($conn, "DELETE FROM bookings WHERE raft_id = $1", array($delete_id));
+            @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
+            @pg_query($conn, "COMMIT");
+            header("Location: manage_rafts.php?msg=deleted");
+            exit();
+        } catch (Exception $exception) {
+            @pg_query($conn, "ROLLBACK");
+            echo "เกิดข้อผิดพลาด: " . $exception->getMessage();
+        }
     }
 }
 
-// 🟢 4. รับค่าคำค้นหา (Search)
+// 4. รับค่าคำค้นหา (Search)
 $search_query = "";
 $search_param = "";
+$search_params = [];
 if (isset($_GET['search']) && trim($_GET['search']) !== '') {
     $search_param = trim($_GET['search']);
-    $search_safe = $conn->real_escape_string($search_param);
-    $search_query = " WHERE r.name LIKE '%$search_safe%' OR r.raft_code LIKE '%$search_safe%' ";
+    $search_query = " WHERE (r.name ILIKE $1 OR r.raft_code ILIKE $1) ";
+    $search_params[] = '%' . $search_param . '%';
 }
 
-// 🟢 5. ระบบแบ่งหน้า (Pagination) หน้าละ 10 รายการ
+// 5. ระบบแบ่งหน้า (Pagination) หน้าละ 10 รายการ
 $limit = 10;
 $page = isset($_GET['page']) && is_numeric($_GET['page']) ? intval($_GET['page']) : 1;
 if ($page < 1) $page = 1;
 $offset = ($page - 1) * $limit;
 
 // นับจำนวนข้อมูลทั้งหมด
-$count_sql = "SELECT COUNT(r.id) as total_rows FROM rafts r $search_query";
-$count_res = $conn->query($count_sql);
-$total_rows = ($count_res) ? $count_res->fetch_assoc()['total_rows'] : 0;
+$total_rows = 0;
+if ($conn) {
+    $count_sql = "SELECT COUNT(r.id) as total_rows FROM rafts r $search_query";
+    $count_res = !empty($search_params) ? @pg_query_params($conn, $count_sql, $search_params) : @pg_query($conn, $count_sql);
+    if ($count_res && $crow = pg_fetch_assoc($count_res)) {
+        $total_rows = intval($crow['total_rows']);
+    }
+}
 $total_pages = ceil($total_rows / $limit);
 
-// 6. ดึงข้อมูลแพ พร้อมแบ่งหน้า
-$sql = "SELECT r.*, t.name as type_name 
-        FROM rafts r 
-        LEFT JOIN raft_types t ON r.raft_type_id = t.id
-        $search_query
-        ORDER BY r.id DESC 
-        LIMIT $limit OFFSET $offset";
-$result = $conn->query($sql);
-?>
+// 6. ดึงข้อมูลแพ พร้อมแบ่งหน้าเก็บใส่ Array
+$rafts = [];
+if ($conn) {
+    if (!empty($search_params)) {
+        $sql = "SELECT r.*, t.name as type_name 
+                FROM rafts r 
+                LEFT JOIN raft_types t ON r.raft_type_id = t.id
+                WHERE (r.name ILIKE $1 OR r.raft_code ILIKE $1)
+                ORDER BY r.id DESC 
+                LIMIT $limit OFFSET $offset";
+        $result = @pg_query_params($conn, $sql, $search_params);
+    } else {
+        $sql = "SELECT r.*, t.name as type_name 
+                FROM rafts r 
+                LEFT JOIN raft_types t ON r.raft_type_id = t.id
+                ORDER BY r.id DESC 
+                LIMIT $limit OFFSET $offset";
+        $result = @pg_query($conn, $sql);
+    }
 
+    if ($result) {
+        while ($row = pg_fetch_assoc($result)) {
+            $rafts[] = $row;
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -145,7 +176,7 @@ $result = $conn->query($sql);
 
         <div class="p-4 md:p-10 flex-grow">
             
-            <!-- 🟢 ส่วนของช่องค้นหา + ปุ่มเพิ่มข้อมูลแพ -->
+            <!-- ส่วนของช่องค้นหา + ปุ่มเพิ่มข้อมูลแพ -->
             <div class="mb-6 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4">
 
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
@@ -195,11 +226,11 @@ $result = $conn->query($sql);
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-50">
-                        <?php if ($result && $result->num_rows > 0): while($row = $result->fetch_assoc()): ?>
+                        <?php if (!empty($rafts)): foreach($rafts as $row): ?>
                         <tr class="hover:bg-blue-50/20 transition">
                             <td class="p-6">
                                 <?php if(!empty($row['featured_image'])): ?>
-                                    <img src="../uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-20 h-14 object-cover rounded-xl shadow-sm border border-slate-100">
+                                    <img src="uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-20 h-14 object-cover rounded-xl shadow-sm border border-slate-100">
                                 <?php else: ?>
                                     <div class="w-20 h-14 bg-gray-100 rounded-xl flex items-center justify-center text-[10px] text-gray-400 uppercase font-black">no image</div>
                                 <?php endif; ?>
@@ -255,7 +286,7 @@ $result = $conn->query($sql);
                                 </div>
                             </td>
                         </tr>
-                        <?php endwhile; else: ?>
+                        <?php endforeach; else: ?>
                             <tr>
                                 <td colspan="7" class="p-20 text-center text-slate-400 font-bold uppercase tracking-widest">
                                     <?php echo !empty($search_param) ? 'ไม่พบข้อมูลแพที่ค้นหา' : 'ไม่พบข้อมูลแพในระบบ'; ?>
@@ -268,16 +299,12 @@ $result = $conn->query($sql);
 
             <!-- Mobile Card View -->
             <div class="card-container grid grid-cols-1 gap-4 md:hidden mb-6">
-                <?php 
-                if ($result && $result->num_rows > 0): 
-                    $result->data_seek(0); 
-                    while($row = $result->fetch_assoc()): 
-                ?>
+                <?php if (!empty($rafts)): foreach($rafts as $row): ?>
                 <div class="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100">
                     <div class="flex gap-4 mb-4">
                         <div class="shrink-0">
                             <?php if(!empty($row['featured_image'])): ?>
-                                <img src="../uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-24 h-24 object-cover rounded-2xl shadow-md border-2 border-white">
+                                <img src="uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-24 h-24 object-cover rounded-2xl shadow-md border-2 border-white">
                             <?php else: ?>
                                 <div class="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center text-[10px] text-gray-400 font-black uppercase text-center p-2">No Image</div>
                             <?php endif; ?>
@@ -326,14 +353,14 @@ $result = $conn->query($sql);
                         </div>
                     </div>
                 </div>
-                <?php endwhile; else: ?>
+                <?php endforeach; else: ?>
                     <div class="p-10 text-center text-slate-400 font-bold">
                         <?php echo !empty($search_param) ? 'ไม่พบข้อมูลแพที่ค้นหา' : 'ไม่พบข้อมูลแพในระบบ'; ?>
                     </div>
                 <?php endif; ?>
             </div>
 
-            <!-- 🟢 ระบบแบ่งหน้า Pagination (UI) -->
+            <!-- ระบบแบ่งหน้า Pagination (UI) -->
             <?php if ($total_pages > 1): ?>
             <div class="flex justify-center mt-4 mb-8">
                 <nav class="inline-flex rounded-2xl shadow-sm bg-white overflow-hidden border border-slate-200">
