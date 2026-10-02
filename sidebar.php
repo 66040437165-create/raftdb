@@ -8,11 +8,10 @@ if (!isset($conn)) {
 
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// คำนวณจำนวนรายการที่ "รอตรวจสอบ" สำหรับ PostgreSQL เพื่อแสดง Badge แจ้งเตือน
+// คำนวณจำนวนรายการที่ "รอตรวจสอบ" สำหรับแสดง Badge
 $pending_count = 0;
 
 if ($conn) {
-    // ดึงรายชื่อคอลัมน์จากตาราง bookings (PostgreSQL Syntax)
     $res_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
     $b_cols_sb = [];
     if ($res_cols) {
@@ -50,7 +49,7 @@ function navClass($page_name, $current_page) {
     </div>
     
     <nav class="flex-grow p-4 space-y-2 mt-2 overflow-y-auto">
-        <!-- เมนูทั่วไป: Admin และ Staff เข้าถึงได้ทุกคน -->
+        <!-- เมนูทั่วไป -->
         <a href="admin_dashboard.php" class="flex items-center p-3 rounded-xl <?php echo navClass('admin_dashboard.php', $current_page); ?>">
             <i class="fa fa-home w-6 text-center"></i> <span class="ml-2">หน้าแรก</span>
         </a>
@@ -70,7 +69,7 @@ function navClass($page_name, $current_page) {
             <i class="fa fa-users w-6 text-center"></i> <span class="ml-2">จัดการสมาชิก</span>
         </a>
 
-        <!-- เมนูเฉพาะ Admin (role_id = 1) เท่านั้น -->
+        <!-- เมนูเฉพาะ Admin (role_id = 1) -->
         <?php if (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1): ?>
             <div class="pt-4 pb-1 px-3 text-[10px] font-bold uppercase text-slate-500 tracking-wider">
                 สำหรับผู้ดูแลระบบ / ผู้จัดการ
@@ -89,12 +88,6 @@ function navClass($page_name, $current_page) {
                 <i class="fa fa-cog w-6 text-center"></i> <span class="ml-2">ตั้งค่าระบบ</span>
             </a>
         <?php endif; ?>
-
-        <!-- ปุ่มตอบลูกค้า LINE (เปลี่ยนใช้ FontAwesome fab fa-line ป้องกัน SVG ขยายยักษ์) -->
-        <a href="https://manager.line.biz/" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 px-4 py-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-2 border border-emerald-500/20">
-            <i class="fab fa-line text-xl w-6 text-center"></i>
-            <span>ตอบลูกค้า (LINE)</span>
-        </a>
     </nav>
 
     <div class="p-4 border-t border-slate-800">
