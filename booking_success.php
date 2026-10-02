@@ -10,22 +10,49 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 
 $booking_id = intval($_GET['id']);
 
-// 2. ดึงข้อมูลการจอง + ข้อมูลแพ
-$sql = "SELECT b.*, 
-               r.name AS raft_name, 
+// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (รองรับทั้งชื่อคอลัมน์ booking_id/id และ raft_name/name)
+$stmt = $conn->prepare("
+    SELECT b.*, 
+           r.raft_name AS raft_name, 
+           r.price_per_day, 
+           r.price_per_hour, 
+           r.raft_img AS featured_image,
+           r.capacity,
+           c.full_name AS customer_name,
+           c.phone AS customer_phone,
+           c.email AS customer_email
+    FROM bookings b
+    JOIN rafts r ON b.raft_id = r.raft_id
+    LEFT JOIN customers c ON b.customer_id = c.id
+    WHERE b.booking_id = ?
+    LIMIT 1
+");
+
+if (!$stmt) {
+    // Fallback เผื่อโครงสร้างตารางใช้ id แทน booking_id
+    $stmt = $conn->prepare("
+        SELECT b.*, 
+               r.raft_name AS raft_name, 
                r.price_per_day, 
                r.price_per_hour, 
-               r.featured_image,
+               r.raft_img AS featured_image,
+               r.capacity,
                c.full_name AS customer_name,
                c.phone AS customer_phone,
                c.email AS customer_email
         FROM bookings b
-        JOIN rafts r ON b.raft_id = r.id
+        JOIN rafts r ON b.raft_id = r.raft_id
         LEFT JOIN customers c ON b.customer_id = c.id
-        WHERE b.id = $booking_id
-        LIMIT 1";
+        WHERE b.id = ?
+        LIMIT 1
+    ");
+}
 
-$result = $conn->query($sql);
+if ($stmt) {
+    $stmt->bind_param("i", $booking_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+}
 
 if (!$result || $result->num_rows == 0) {
     echo "<div style='text-align:center; padding:50px; font-family:sans-serif;'>
@@ -36,32 +63,41 @@ if (!$result || $result->num_rows == 0) {
 }
 
 $booking = $result->fetch_assoc();
+if ($stmt) $stmt->close();
 
 // ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตารางนี้)
 $payment = null;
 $chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
 if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
-    $pay_res = $conn->query("SELECT * FROM payments WHERE booking_id = $booking_id ORDER BY id DESC LIMIT 1");
-    if ($pay_res && $pay_res->num_rows > 0) {
-        $payment = $pay_res->fetch_assoc();
+    $pay_stmt = $conn->prepare("SELECT * FROM payments WHERE booking_id = ? ORDER BY id DESC LIMIT 1");
+    if ($pay_stmt) {
+        $pay_stmt->bind_param("i", $booking_id);
+        $pay_stmt->execute();
+        $pay_res = $pay_stmt->get_result();
+        if ($pay_res && $pay_res->num_rows > 0) {
+            $payment = $pay_res->fetch_assoc();
+        }
+        $pay_stmt->close();
     }
 }
 
 // กำหนดตัวแปรข้อมูลสำหรับแสดงผล
-$booking_code = !empty($booking['booking_code']) ? $booking['booking_code'] : ('BK' . str_pad($booking['id'], 6, '0', STR_PAD_LEFT));
+$b_id = $booking['booking_id'] ?? $booking['id'] ?? $booking_id;
+$booking_code = !empty($booking['booking_code']) ? $booking['booking_code'] : ('BK' . str_pad($b_id, 6, '0', STR_PAD_LEFT));
 $guest_name   = !empty($booking['customer_name']) ? $booking['customer_name'] : ($booking['guest_name'] ?? 'ลูกค้า');
 $guest_tel    = !empty($booking['customer_phone']) ? $booking['customer_phone'] : ($booking['guest_tel'] ?? '-');
 $guest_email  = !empty($booking['customer_email']) ? $booking['customer_email'] : ($booking['guest_email'] ?? '-');
 
-$check_in_date = $booking['check_in_date'] ?? date('Y-m-d');
-$check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($booking['check_in_time'])) : '09:00';
-$check_out_date = $booking['check_out_date'] ?? $check_in_date;
-$check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : '17:30';
+$check_in_date = $booking['check_in_date'] ?? ($booking['check_in'] ? date('Y-m-d', strtotime($booking['check_in'])) : date('Y-m-d'));
+$check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($booking['check_in_time'])) : (!empty($booking['check_in']) ? date('H:i', strtotime($booking['check_in'])) : '09:00');
+
+$check_out_date = $booking['check_out_date'] ?? ($booking['check_out'] ? date('Y-m-d', strtotime($booking['check_out'])) : $check_in_date);
+$check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : (!empty($booking['check_out']) ? date('H:i', strtotime($booking['check_out'])) : '17:30');
 
 $total_price = floatval($booking['total_price'] ?? $booking['raft_price'] ?? 0);
 $slip_img = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
 
-// สถานะการจอง (รองรับทั้ง status_id = 2 คืออนุมัติแล้ว หรือ status = 'confirmed')
+// สถานะการจอง (รองรับทั้ง status_id = 2 หรือ status = 'confirmed')
 $is_confirmed = (isset($booking['status_id']) && $booking['status_id'] == 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
 
 // ฟังก์ชันแปลงวันที่เป็นภาษาไทย
@@ -101,7 +137,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>จองสำเร็จ - ChillRaft</title>
+    <title>จองสำเร็จ - ล่องแพหนองกวาก</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
@@ -115,7 +151,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                 <i class="fa fa-check text-4xl text-emerald-500"></i>
             </div>
             <h1 class="text-3xl font-black text-gray-800">ส่งคำขอจองสำเร็จ!</h1>
-            <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพกับเรา</p>
+            <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพหนองกวากกับเรา</p>
         </div>
 
         <div class="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-gray-100">
@@ -205,7 +241,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                 <div class="border-t-2 border-dashed border-gray-100 pt-6 mb-8">
                     <div class="flex justify-between items-end">
                         <p class="text-gray-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
-                        <p class="text-4xl font-black text-blue-600">฿<?php echo number_format($total_price); ?></p>
+                        <p class="text-4xl font-black text-blue-600">฿<?php echo number_format($total_price, 2); ?></p>
                     </div>
                 </div>
 
@@ -225,7 +261,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                  alt="PromptPay QR Code" class="w-48 h-48 mx-auto opacity-90">
                         </div>
                         
-                        <p class="font-bold text-blue-900 text-lg">บจก.หนองกวากจำกัด</p>
+                        <p class="font-bold text-blue-900 text-lg">ล่องแพหนองกวาก</p>
                         <p class="text-gray-400 text-sm">PromptPay ID: 089-123-4567</p>
                     </div>
 
@@ -286,11 +322,11 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     </label>
                                     <input type="file" name="payment_slip" accept="image/*" required
                                            class="block w-full text-sm text-slate-500
-                                                  file:mr-4 file:py-2.5 file:px-5
-                                                  file:rounded-xl file:border-0
-                                                  file:text-xs file:font-bold
-                                                  file:bg-blue-600 file:text-white
-                                                  hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
+                                                 file:mr-4 file:py-2.5 file:px-5
+                                                 file:rounded-xl file:border-0
+                                                 file:text-xs file:font-bold
+                                                 file:bg-blue-600 file:text-white
+                                                 hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
                                 </div>
                                 
                                 <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2">
