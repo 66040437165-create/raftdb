@@ -28,7 +28,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $chk_table_cust = @pg_query($conn, "SELECT 1 FROM information_schema.tables WHERE table_name = 'customers'");
     
     if ($chk_table_cust && pg_num_rows($chk_table_cust) > 0 && !empty($guest_tel)) {
-        // ตรวจสอบคอลัมน์ในตาราง customers
         $c_cols = [];
         $chk_c_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'customers'");
         if ($chk_c_cols) {
@@ -137,7 +136,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $status_id    = 1; // 1 = รอตรวจสอบ (Pending)
     $total_guests = intval($_POST['guests'] ?? $_POST['num_guests'] ?? 2);
 
-    // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings (PostgreSQL Syntax)
+    // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings
     $b_cols = [];
     $check_b = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
     if ($check_b) {
@@ -223,13 +222,20 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $insert_values[] = '$' . $p_idx++;
         $params[] = $total_guests;
     }
-    // ราคา raft_price หรือ total_price
-    if (in_array('raft_price', $b_cols)) {
-        $insert_fields[] = "raft_price";
+
+    // 🟢 แก้ไขจุดนี้: ใส่ราคาลงทุกคอลัมน์ราคาที่ตารางมีอยู่ (โดยเฉพาะ total_amount ที่บังคับ NOT NULL)
+    if (in_array('total_amount', $b_cols)) {
+        $insert_fields[] = "total_amount";
         $insert_values[] = '$' . $p_idx++;
         $params[] = $total_price;
-    } elseif (in_array('total_price', $b_cols)) {
+    }
+    if (in_array('total_price', $b_cols)) {
         $insert_fields[] = "total_price";
+        $insert_values[] = '$' . $p_idx++;
+        $params[] = $total_price;
+    }
+    if (in_array('raft_price', $b_cols)) {
+        $insert_fields[] = "raft_price";
         $insert_values[] = '$' . $p_idx++;
         $params[] = $total_price;
     }
@@ -286,4 +292,3 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     header("Location: index.php");
     exit();
 }
-?>
