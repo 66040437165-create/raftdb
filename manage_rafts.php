@@ -18,21 +18,35 @@ if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
     exit();
 }
 
-// 3. ระบบลบข้อมูลแพ
+// 3. ระบบลบข้อมูลแพ (เรียงลำดับ Foreign Key ให้ถูกต้อง)
 if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
-    if ($conn) {
+    if ($conn && $delete_id > 0) {
         @pg_query($conn, "BEGIN");
         try {
-            // 3.1 ดึงรูปสลิปการจองเพื่อลบไฟล์
+            // 3.1 ลบข้อมูลในตาราง payments ที่ผูกกับ bookings ของแพนี้ก่อน (ป้องกัน Foreign Key Error)
+            $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
+            $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
+            if ($has_pay) {
+                // ลบรูปสลิปจริงจาก payments
+                $res_pay_slips = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
+                if ($res_pay_slips) {
+                    while ($ps = pg_fetch_assoc($res_pay_slips)) {
+                        if (!empty($ps['slip_image'])) { @unlink("uploads/slips/" . $ps['slip_image']); }
+                    }
+                }
+                @pg_query_params($conn, "DELETE FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
+            }
+
+            // 3.2 ลบรูปสลิปจากตาราง bookings (ถ้ามี)
             $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
             if ($res_slips) {
                 while ($slip = pg_fetch_assoc($res_slips)) {
                     if (!empty($slip['slip_image'])) { @unlink("uploads/slips/" . $slip['slip_image']); }
                 }
             }
-            
-            // 3.2 ดึงรูปภาพจากตาราง rafts (featured_image และ image_1 ถึง image_5) เพื่อลบไฟล์
+
+            // 3.3 ลบรูปภาพจากตาราง rafts (featured_image และ image_1 ถึง image_5)
             $res_raft_imgs = @pg_query_params($conn, "SELECT featured_image, image_1, image_2, image_3, image_4, image_5 FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
                 if (!empty($r_img['featured_image'])) { @unlink("uploads/" . $r_img['featured_image']); }
@@ -42,7 +56,7 @@ if (isset($_GET['delete_id'])) {
                 }
             }
 
-            // 3.3 รองรับการลบรูปจากตารางย่อย raft_images (ถ้ามี)
+            // 3.4 ลบรูปจากตารางย่อย raft_images (ถ้ามี)
             $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
             $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
             if ($has_tbl) {
@@ -55,15 +69,26 @@ if (isset($_GET['delete_id'])) {
                 }
             }
 
-            // 3.4 ลบข้อมูลจากตาราง bookings และ rafts
+            // 3.5 ลบรายการจองของแพนี้ในตาราง bookings
             @pg_query_params($conn, "DELETE FROM bookings WHERE raft_id = $1", array($delete_id));
-            @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
-            @pg_query($conn, "COMMIT");
-            header("Location: manage_rafts.php?msg=deleted");
-            exit();
+
+            // 3.6 ลบแพออกจากตาราง rafts
+            $del_raft = @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
+
+            if ($del_raft) {
+                @pg_query($conn, "COMMIT");
+                header("Location: manage_rafts.php?msg=deleted");
+                exit();
+            } else {
+                $err_db = pg_last_error($conn);
+                @pg_query($conn, "ROLLBACK");
+                header("Location: manage_rafts.php?msg=error&err=" . urlencode($err_db));
+                exit();
+            }
         } catch (Exception $exception) {
             @pg_query($conn, "ROLLBACK");
-            echo "เกิดข้อผิดพลาด: " . $exception->getMessage();
+            header("Location: manage_rafts.php?msg=error&err=" . urlencode($exception->getMessage()));
+            exit();
         }
     }
 }
@@ -171,6 +196,11 @@ if ($conn) {
                     <i class="fa fa-check-circle"></i> เพิ่มข้อมูลแพสำเร็จ!
                 </div>
                 <script>setTimeout(() => { const t = document.getElementById('toast'); if(t) t.remove(); }, 3000);</script>
+            <?php elseif(isset($_GET['msg']) && $_GET['msg'] === 'error'): ?>
+                <div id="toast" class="bg-rose-500 text-white px-4 lg:px-6 py-2 rounded-full shadow-lg text-xs lg:text-sm font-bold flex items-center gap-2">
+                    <i class="fa fa-exclamation-circle"></i> ไม่สามารถลบแพได้: <?php echo htmlspecialchars($_GET['err'] ?? 'ติดข้อมูลผูกพัน'); ?>
+                </div>
+                <script>setTimeout(() => { const t = document.getElementById('toast'); if(t) t.remove(); }, 5000);</script>
             <?php endif; ?>
         </header>
 
@@ -279,7 +309,7 @@ if ($conn) {
                                         <i class="fa fa-edit text-sm"></i>
                                     </a>
                                     <a href="?delete_id=<?php echo $row['id']; ?>" 
-                                       onclick="return confirm('⚠️ ยืนยันการลบแพนี้ออกจากระบบ?')" 
+                                       onclick="return confirm('⚠️ ยืนยันการลบแพนี้ออกจากระบบ? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
                                        class="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg flex items-center justify-center hover:bg-rose-600 hover:text-white transition shadow-sm" title="ลบ">
                                         <i class="fa fa-trash text-sm"></i>
                                     </a>
@@ -346,7 +376,7 @@ if ($conn) {
                                 <i class="fa fa-edit"></i>
                             </a>
                             <a href="?delete_id=<?php echo $row['id']; ?>" 
-                               onclick="return confirm('ยืนยันลบข้อมูลแพนี้?')" 
+                               onclick="return confirm('ยืนยันลบข้อมูลแพนี้? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
                                class="bg-rose-50 text-rose-600 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm">
                                 <i class="fa fa-trash"></i>
                             </a>
