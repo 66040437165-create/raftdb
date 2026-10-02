@@ -64,54 +64,63 @@ if (!isset($profile['userId'])) {
     die("ไม่สามารถดึงข้อมูลโปรไฟล์จาก LINE API ได้");
 }
 
-$line_id = $profile['userId'];
-$display_name = $profile['displayName'];
-$picture_url = $profile['pictureUrl'] ?? '';
+$line_id      = $profile['userId'];
+$display_name = $profile['displayName'] ?? 'LINE User';
+$picture_url  = $profile['pictureUrl'] ?? '';
 
+// 5. ตรวจสอบในฐานข้อมูลว่ามีผู้ใช้ที่เคยผูก LINE ID นี้ไว้แล้วหรือยัง (PostgreSQL)
+if ($conn) {
+    $query = "SELECT * FROM users WHERE line_id = $1 LIMIT 1";
+    $res = @pg_query_params($conn, $query, array($line_id));
 
-// 5. ตรวจสอบในฐานข้อมูลว่ามีผู้ใช้ที่เคยผูก LINE ID นี้ไว้แล้วหรือยัง
-$stmt = $conn->prepare("SELECT * FROM users WHERE line_id = ?");
-$stmt->bind_param("s", $line_id);
-$stmt->execute();
-$res = $stmt->get_result();
-
-if ($res->num_rows > 0) {
-    // ผู้ใช้เคยล็อกอินด้วย LINE มาก่อนแล้ว -> ล็อกอินเข้าสู่ระบบทันที
-    $user = $res->fetch_assoc();
-    
-    $_SESSION['user_id'] = $user['user_id'];
-    $_SESSION['username'] = $user['username'];
-    $_SESSION['fullname'] = $user['fullname'];
-    $_SESSION['role'] = strtolower($user['role']);
-    
-    if ($_SESSION['role'] == 'admin') {
-        header("Location: Backend/admin_dashboard.php");
-    } else {
-        header("Location: index.php");
-    }
-    exit();
-} else {
-    // ผู้ใช้คนนี้ล็อกอินเข้ามาเป็นครั้งแรก -> สมัครสมาชิกให้อัตโนมัติ
-    $random_username = "line_" . substr($line_id, 0, 10);
-    $random_password = bin2hex(random_bytes(6)); 
-    $hashed_password = password_hash($random_password, PASSWORD_DEFAULT); 
-    $default_tel = '';
-    
-    $stmt_insert = $conn->prepare("INSERT INTO users (username, password, fullname, role, tel, line_id) VALUES (?, ?, ?, 'customer', ?, ?)");
-    $stmt_insert->bind_param("sssss", $random_username, $hashed_password, $display_name, $default_tel, $line_id);
-    
-    if ($stmt_insert->execute()) {
-        $new_user_id = $stmt_insert->insert_id;
+    if ($res && pg_num_rows($res) > 0) {
+        // ผู้ใช้เคยล็อกอินด้วย LINE มาก่อนแล้ว -> ล็อกอินเข้าสู่ระบบทันที
+        $user = pg_fetch_assoc($res);
         
-        $_SESSION['user_id'] = $new_user_id;
-        $_SESSION['username'] = $random_username;
-        $_SESSION['fullname'] = $display_name;
-        $_SESSION['role'] = 'customer';
+        $_SESSION['user_id']  = (int)($user['user_id'] ?? $user['id'] ?? 0);
+        $_SESSION['username'] = $user['username'] ?? '';
+        $_SESSION['fullname'] = $user['fullname'] ?? $user['full_name'] ?? $display_name;
+        $_SESSION['role']     = strtolower($user['role'] ?? 'customer');
         
-        header("Location: index.php");
+        if ($_SESSION['role'] === 'admin') {
+            header("Location: admin_dashboard.php");
+        } else {
+            header("Location: index.php");
+        }
         exit();
     } else {
-        die("เกิดข้อผิดพลาดในการลงทะเบียนสมาชิกใหม่ด้วย LINE: " . $conn->error);
+        // ผู้ใช้คนนี้ล็อกอินเข้ามาเป็นครั้งแรก -> สมัครสมาชิกให้อัตโนมัติ (ใช้ RETURNING เพื่อเอา ID)
+        $random_username = "line_" . substr($line_id, 0, 10);
+        $random_password = bin2hex(random_bytes(6)); 
+        $hashed_password = password_hash($random_password, PASSWORD_DEFAULT); 
+        $default_tel     = '';
+        
+        $sql_insert = "INSERT INTO users (username, password, fullname, role, tel, line_id) 
+                       VALUES ($1, $2, $3, 'customer', $4, $5) 
+                       RETURNING *";
+        $res_insert = @pg_query_params($conn, $sql_insert, array(
+            $random_username, 
+            $hashed_password, 
+            $display_name, 
+            $default_tel, 
+            $line_id
+        ));
+        
+        if ($res_insert && ($new_user = pg_fetch_assoc($res_insert))) {
+            $new_user_id = (int)($new_user['user_id'] ?? $new_user['id'] ?? 0);
+            
+            $_SESSION['user_id']  = $new_user_id;
+            $_SESSION['username'] = $random_username;
+            $_SESSION['fullname'] = $display_name;
+            $_SESSION['role']     = 'customer';
+            
+            header("Location: index.php");
+            exit();
+        } else {
+            die("เกิดข้อผิดพลาดในการลงทะเบียนสมาชิกใหม่ด้วย LINE: " . pg_last_error($conn));
+        }
     }
+} else {
+    die("ไม่สามารถเชื่อมต่อฐานข้อมูลได้");
 }
 ?>
