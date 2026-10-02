@@ -2,10 +2,10 @@
 session_start(); 
 require_once __DIR__ . '/db_config.php'; 
 
-// 1. ดึงค่าตั้งค่าจากฐานข้อมูล (เปลี่ยนเป็น PostgreSQL syntax)
+// 1. ดึงค่าตั้งค่าจากฐานข้อมูล (PostgreSQL)
 $settings = [];
 if ($conn) {
-    $res_settings = @pg_query($conn, "SELECT * FROM settings");
+    $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings");
     if ($res_settings) {
         while ($row = pg_fetch_assoc($res_settings)) {$settings[$row['setting_key']] =$row['setting_value'];
         }
@@ -14,14 +14,40 @@ if ($conn) {
 $open_time =$settings['open_time'] ?? '09:00';
 $close_time =$settings['close_time'] ?? '17:30';
 
-// 2. รับค่าค้นหาจากฟอร์ม (เปลี่ยนการ escape string เป็น PostgreSQL)
+// 2. รับค่าค้นหาจากฟอร์ม
 $checkin = isset($_GET['checkin']) && !empty($_GET['checkin']) ?$_GET['checkin'] : date('Y-m-d');
 $checkin_time = isset($_GET['checkin_time']) ? $_GET['checkin_time'] :$open_time;
 $checkout = date('Y-m-d', strtotime($checkin . ' +1 day'));$checkout_time = '11:00';
 
 $guests = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
-$search_keyword = '';
-if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, trim($_GET['search']));
+$search_keyword = isset($_GET['search']) ? trim($_GET['search']) : '';
+
+// 3. ดึงข้อมูลแพว่างจากตาราง rafts (PostgreSQL)
+$rafts = [];
+if ($conn) {$sql = "SELECT r.* FROM rafts r 
+            WHERE (TRIM(LOWER(r.status)) = 'available' OR r.status = 'ว่าง')";
+    $params = [];$p_idx = 1;
+
+    if (!empty($search_keyword)) {$sql .= " AND (r.name ILIKE $" . $p_idx . " OR r.raft_code ILIKE $" . $p_idx . " OR r.description ILIKE $" . $p_idx . ")";
+        $params[] = '%' . $search_keyword . '\%';$p_idx++;
+    }
+
+    // ตรวจสอบกับ check_in_date ในตาราง bookings ไม่ให้แสดงแพที่ถูกจองแล้ว
+    $sql .= " AND NOT EXISTS (
+                SELECT 1 FROM bookings b 
+                WHERE b.raft_id = r.id 
+                  AND b.check_in_date::text = $" . $p_idx . "
+                  AND (COALESCE(b.status_id, 0) NOT IN (3, 4) AND COALESCE(b.status, '') NOT IN ('cancelled', 'rejected'))
+            )
+            ORDER BY r.id DESC";
+    $params[] =$checkin;
+
+    $result = @pg_query_params($conn, $sql,$params);
+    if ($result) {
+        while ($row = pg_fetch_assoc($result)) {
+            $rafts[] =$row;
+        }
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -57,7 +83,7 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
     <nav class="bg-white/90 backdrop-blur-md p-3 md:p-4 shadow-sm sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center">
             <a href="index.php" class="text-xl md:text-2xl font-black text-blue-600 flex items-center gap-2">
-                <span class="text-2xl md:text-3xl">🌊ล่องแพหนองกวาก</span>
+                <span class="text-2xl md:text-3xl">🌊 ล่องแพหนองกวาก</span>
                 <span class="hidden xs:inline">จองแพออนไลน์</span>
             </a>
             <div class="flex items-center space-x-2 md:space-x-4">
@@ -68,7 +94,10 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
                     <span class="hidden sm:inline text-sm font-bold text-gray-600">👤 <?php echo htmlspecialchars($_SESSION['fullname'] ?? ''); ?></span>
                     <a href="logout.php" class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-xl text-[10px] md:text-xs transition font-bold shadow-lg shadow-red-100 btn-animate">ออกจากระบบ</a>
                 <?php else: ?>
-                    <a href="login.php" class="text-blue-600 px-2 md:px-5 py-2 rounded-lg font-bold hover:text-blue-800 transition text-[11px] md:text-sm">เข้าสู่ระบบ</a>
+                    <a href="line_login.php" class="bg-[#06C755] hover:bg-[#05b04b] text-white px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+                        <i class="fab fa-line text-sm"></i> เข้าสู่ระบบด้วย LINE
+                    </a>
+                    <a href="login.php" class="text-blue-600 px-2 md:px-3 py-2 rounded-lg font-bold hover:text-blue-800 transition text-[11px] md:text-sm">เจ้าหน้าที่</a>
                 <?php endif; ?>
             </div>
         </div>
@@ -77,8 +106,8 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
     <!-- Header Hero -->
     <header class="hero-bg text-white pt-32 pb-20 md:pt-48 md:pb-12 h-[75vh] md:h-auto flex items-center justify-center">
         <div class="container mx-auto text-center px-6">
-            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight"><br class="md:hidden"></h2>
-            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90"></p>
+            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight">สัมผัสธรรมชาติเหนือผืนน้ำ</h2>
+            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90">จองแพพักผ่อน ล่องแพบรรยากาศสุดชิล สะดวก รวดเร็ว</p>
 
             <div class="glass-effect p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl text-gray-800 max-w-6xl mx-auto border border-white/40 md:-mb-24 relative z-10">
                 <form action="index.php#rafts" method="GET" class="flex flex-col md:grid md:grid-cols-5 gap-4 md:gap-6 items-stretch md:items-end">
@@ -135,50 +164,28 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
         
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 md:gap-12">
             <?php
-            if ($conn) {
-                // 3. ปรับ SQL ดึงข้อมูลจากตาราง rafts (PostgreSQL Syntax)
-                $sql = "SELECT r.* FROM rafts r 
-                        WHERE (TRIM(LOWER(r.status)) = 'available' OR r.status = 'ว่าง')";
+            if (!empty($rafts)):
+                foreach ($rafts as$row):
+                    $raft_id =$row['id'];
+                    $raft_name = htmlspecialchars($row['name']);
+                    
+                    // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
+                    $displayImg = "";
+                    $target_dir = __DIR__ . "/uploads/";
 
-                if (!empty($search_keyword)) {$sql .= " AND (r.name LIKE '%$search_keyword%' OR r.raft_code LIKE '%$search_keyword\%' OR r.description LIKE '\%$search_keyword%')";
-                }
-
-                // ตรวจสอบกับ check_in_date ในตาราง bookings
-                $sql .= " AND NOT EXISTS (
-                            SELECT 1 FROM bookings b 
-                            WHERE b.raft_id = r.id 
-                              AND b.check_in_date = '$checkin'
-                              AND b.status_id NOT IN (3, 4) -- ไม่นับรายการที่ยกเลิก
-                        )
-                        ORDER BY r.id DESC";
-
-                $result = @pg_query($conn,$sql);
-                
-                if ($result && pg_num_rows($result) > 0):
-                    while($row = pg_fetch_assoc($result)):
-                        $raft_id =$row['id'];
-                        $raft_name = htmlspecialchars($row['name']);
-                        
-                        // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
-                        $displayImg = "";
-                        $target_dir = __DIR__ . "/uploads/";
-
-                        // 1. ตรวจสอบ featured_image ก่อน
-                        if (!empty($row['featured_image']) && file_exists($target_dir .$row['featured_image'])) {
-                            $displayImg = "uploads/" . $row['featured_image'];
-                        } else {
-                            // 2. ถ้าไม่มี featured_image ให้ไล่เช็ค image_1 ถึง image_5
-                            for ($i = 1; $i <= 5; $i++) {
-                                $img_col = "image_" . $i;
-                                if (!empty($row[$img_col]) && file_exists($target_dir .$row[$img_col])) {$displayImg = "uploads/" . $row[$img_col];
-                                    break;
-                                }
+                    if (!empty($row['featured_image']) && file_exists($target_dir .$row['featured_image'])) {
+                        $displayImg = "uploads/" . $row['featured_image'];
+                    } else {
+                        for ($i = 1; $i <= 5; $i++) {
+                            $img_col = "image_" . $i;
+                            if (!empty($row[$img_col]) && file_exists($target_dir .$row[$img_col])) {$displayImg = "uploads/" . $row[$img_col];
+                                break;
                             }
                         }
+                    }
 
-                        // 3. หากไม่มีรูปในระบบเลย ให้ใช้ รูป Default
-                        if (empty($displayImg)) {$displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
-                        }
+                    if (empty($displayImg)) {$displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+                    }
             ?>
                 <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo$checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo$checkout_time; ?>" 
                    class="group bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-sm hover:shadow-2xl transition duration-500 overflow-hidden border border-gray-100 flex flex-col h-full">
@@ -211,16 +218,13 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
                     </div>
                 </a>
             <?php 
-                    endwhile;
-                else:
-                    echo "<div class='col-span-full py-16 md:py-24 text-center bg-white rounded-[2rem] md:rounded-[3rem] border-2 border-dashed border-gray-200'>
-                            <p class='text-gray-400 text-lg md:text-xl font-bold'>🏜️ ไม่พบแพว่างที่พร้อมให้บริการในขณะนี้ (หรือยังไม่ได้เพิ่มข้อมูลแพ)</p>
-                            <a href='index.php' class='mt-4 inline-block text-blue-600 font-bold hover:underline italic'>ล้างการค้นหา</a>
-                          </div>";
-                endif; 
-            } else {
-                echo "<div class='col-span-full py-10 text-center text-red-500 font-bold'>ไม่สามารถเชื่อมต่อฐานข้อมูลได้ กรุณาตั้งค่า DATABASE_URL บน Render</div>";
-            }
+                endforeach;
+            else:
+                echo "<div class='col-span-full py-16 md:py-24 text-center bg-white rounded-[2rem] md:rounded-[3rem] border-2 border-dashed border-gray-200'>
+                        <p class='text-gray-400 text-lg md:text-xl font-bold'>🏜️ ไม่พบแพว่างที่พร้อมให้บริการในขณะนี้</p>
+                        <a href='index.php' class='mt-4 inline-block text-blue-600 font-bold hover:underline italic'>ล้างการค้นหา</a>
+                      </div>";
+            endif; 
             ?>
         </div>
     </main>
@@ -236,21 +240,24 @@ if (isset($_GET['search']) && $conn) {$search_keyword = pg_escape_string($conn, 
                 <p class="text-[10px] md:text-xs text-gray-400 font-bold">สแกนเพื่อจองผ่านมือถือได้ทันที<br>สะดวก รวดเร็ว ทุกที่ทุกเวลา</p>
             </div>
             <p class="text-gray-400 text-[9px] md:text-[10px] font-black uppercase tracking-widest">
-                 สัมผัสธรรมชาติที่แตกต่าง
+                สัมผัสธรรมชาติที่แตกต่าง
             </p>
         </div>
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script>
-        new QRCode(document.getElementById("index_qrcode_canvas"), {
-            text: window.location.href,
-            width: 160,
-            height: 160,
-            colorDark : "#000000",
-            colorLight : "#ffffff",
-            correctLevel : QRCode.CorrectLevel.H
-        });
+        const qrElem = document.getElementById("index_qrcode_canvas");
+        if (qrElem) {
+            new QRCode(qrElem, {
+                text: window.location.href,
+                width: 160,
+                height: 160,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        }
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('booking') === 'success') {
