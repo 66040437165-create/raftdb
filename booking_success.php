@@ -9,52 +9,34 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 }
 
 $booking_id = intval($_GET['id']);
+$booking = null;
 
-// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (รองรับทั้งชื่อคอลัมน์ booking_id/id และ raft_name/name)
-$stmt = $conn->prepare("
-    SELECT b.*, 
-           r.raft_name AS raft_name, 
-           r.price_per_day, 
-           r.price_per_hour, 
-           r.raft_img AS featured_image,
-           r.capacity,
-           c.full_name AS customer_name,
-           c.phone AS customer_phone,
-           c.email AS customer_email
-    FROM bookings b
-    JOIN rafts r ON b.raft_id = r.raft_id
-    LEFT JOIN customers c ON b.customer_id = c.id
-    WHERE b.booking_id = ?
-    LIMIT 1
-");
-
-if (!$stmt) {
-    // Fallback เผื่อโครงสร้างตารางใช้ id แทน booking_id
-    $stmt = $conn->prepare("
+// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (PostgreSQL Syntax)
+if ($conn) {
+    $sql = "
         SELECT b.*, 
-               r.raft_name AS raft_name, 
+               COALESCE(r.name, '') AS raft_name, 
                r.price_per_day, 
                r.price_per_hour, 
-               r.raft_img AS featured_image,
+               r.featured_image,
                r.capacity,
                c.full_name AS customer_name,
                c.phone AS customer_phone,
                c.email AS customer_email
         FROM bookings b
-        JOIN rafts r ON b.raft_id = r.raft_id
+        LEFT JOIN rafts r ON b.raft_id = r.id
         LEFT JOIN customers c ON b.customer_id = c.id
-        WHERE b.id = ?
+        WHERE b.id = $1
         LIMIT 1
-    ");
+    ";
+    
+    $res = @pg_query_params($conn, $sql, array($booking_id));
+    if ($res && pg_num_rows($res) > 0) {
+        $booking = pg_fetch_assoc($res);
+    }
 }
 
-if ($stmt) {
-    $stmt->bind_param("i", $booking_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-}
-
-if (!$result || $result->num_rows == 0) {
+if (!$booking) {
     echo "<div style='text-align:center; padding:50px; font-family:sans-serif;'>
             <h2>ไม่พบข้อมูลการจอง</h2>
             <a href='index.php'>กลับหน้าหลัก</a>
@@ -62,43 +44,39 @@ if (!$result || $result->num_rows == 0) {
     exit();
 }
 
-$booking = $result->fetch_assoc();
-if ($stmt) $stmt->close();
-
-// ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตารางนี้)
+// 3. ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตาราง payments)
 $payment = null;
-$chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
-if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
-    $pay_stmt = $conn->prepare("SELECT * FROM payments WHERE booking_id = ? ORDER BY id DESC LIMIT 1");
-    if ($pay_stmt) {
-        $pay_stmt->bind_param("i", $booking_id);
-        $pay_stmt->execute();
-        $pay_res = $pay_stmt->get_result();
-        if ($pay_res && $pay_res->num_rows > 0) {
-            $payment = $pay_res->fetch_assoc();
+if ($conn) {
+    $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.payments')");
+    $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
+    
+    if ($has_tbl) {
+        $pay_res = @pg_query_params($conn, "SELECT * FROM payments WHERE booking_id = $1 ORDER BY id DESC LIMIT 1", array($booking_id));
+        if ($pay_res && pg_num_rows($pay_res) > 0) {
+            $payment = pg_fetch_assoc($pay_res);
         }
-        $pay_stmt->close();
     }
 }
 
 // กำหนดตัวแปรข้อมูลสำหรับแสดงผล
-$b_id = $booking['booking_id'] ?? $booking['id'] ?? $booking_id;
+$b_id = $booking['id'] ?? $booking_id;
 $booking_code = !empty($booking['booking_code']) ? $booking['booking_code'] : ('BK' . str_pad($b_id, 6, '0', STR_PAD_LEFT));
 $guest_name   = !empty($booking['customer_name']) ? $booking['customer_name'] : ($booking['guest_name'] ?? 'ลูกค้า');
 $guest_tel    = !empty($booking['customer_phone']) ? $booking['customer_phone'] : ($booking['guest_tel'] ?? '-');
 $guest_email  = !empty($booking['customer_email']) ? $booking['customer_email'] : ($booking['guest_email'] ?? '-');
 
-$check_in_date = $booking['check_in_date'] ?? ($booking['check_in'] ? date('Y-m-d', strtotime($booking['check_in'])) : date('Y-m-d'));
+$check_in_date = $booking['check_in_date'] ?? (!empty($booking['check_in']) ? date('Y-m-d', strtotime($booking['check_in'])) : date('Y-m-d'));
 $check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($booking['check_in_time'])) : (!empty($booking['check_in']) ? date('H:i', strtotime($booking['check_in'])) : '09:00');
 
-$check_out_date = $booking['check_out_date'] ?? ($booking['check_out'] ? date('Y-m-d', strtotime($booking['check_out'])) : $check_in_date);
+$check_out_date = $booking['check_out_date'] ?? (!empty($booking['check_out']) ? date('Y-m-d', strtotime($booking['check_out'])) : $check_in_date);
 $check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : (!empty($booking['check_out']) ? date('H:i', strtotime($booking['check_out'])) : '17:30');
 
-$total_price = floatval($booking['total_price'] ?? $booking['raft_price'] ?? 0);
+// ดึงยอดชำระเงิน (รองรับ total_amount, total_price, raft_price)
+$total_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
 $slip_img = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
 
 // สถานะการจอง (รองรับทั้ง status_id = 2 หรือ status = 'confirmed')
-$is_confirmed = (isset($booking['status_id']) && $booking['status_id'] == 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
+$is_confirmed = (isset($booking['status_id']) && (int)$booking['status_id'] === 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
 
 // ฟังก์ชันแปลงวันที่เป็นภาษาไทย
 function thai_date_short($date_str) {
@@ -109,25 +87,26 @@ function thai_date_short($date_str) {
         7 => "ก.ค.", 8 => "ส.ค.", 9 => "ก.ย.", 10 => "ต.ค.", 11 => "พ.ย.", 12 => "ธ.ค."
     );
     $d = date('j', $timestamp);
-    $m = $thai_months[date('n', $timestamp)];
+    $m = $thai_months[(int)date('n', $timestamp)];
     $y = date('Y', $timestamp) + 543;
     return "$d $m $y";
 }
 
 // -------------------------------------------------------------------------
 // จัดเตรียมข้อความรายละเอียดเพื่อส่งเข้า LINE ร้าน
+$raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('แพ #' . ($booking['raft_id'] ?? ''));
 $line_text = "สวัสดีครับ ขอแจ้งรายละเอียดการจองแพครับ 🛶\n";
 $line_text .= "━━━━━━━━━━━━━━━━\n";
 $line_text .= "📋 Booking ID: {$booking_code}\n";
 $line_text .= "👤 ชื่อผู้จอง: {$guest_name}\n";
 $line_text .= "📞 เบอร์โทร: {$guest_tel}\n";
-$line_text .= "⛵ แพที่จอง: {$booking['raft_name']}\n";
+$line_text .= "⛵ แพที่จอง: {$raft_display_name}\n";
 $line_text .= "📅 วันที่เข้าใช้บริการ: " . thai_date_short($check_in_date) . " ({$check_in_time} น.)\n";
 $line_text .= "💰 ยอดรวมทั้งสิ้น: ฿" . number_format($total_price, 2) . "\n";
 $line_text .= "━━━━━━━━━━━━━━━━\n";
 $line_text .= "✨ รบกวนแอดมินตรวจสอบการชำระเงินให้ด้วยนะครับ";
 
-$line_oa_id = "@YOUR_LINE_OA_ID"; // เปลี่ยนเป็น Line ID ร้าน
+$line_oa_id = "@YOUR_LINE_OA_ID"; // เปลี่ยนเป็น LINE OA ID ของร้านได้ตามต้องการ
 $encoded_line_text = urlencode($line_text);
 $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_text}";
 // -------------------------------------------------------------------------
@@ -217,9 +196,9 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                             <?php endif; ?>
                         </div>
                         <div>
-                            <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($booking['raft_name']); ?></h4>
+                            <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($raft_display_name); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
-                            <p class="text-blue-600 font-bold text-sm mt-1">ราคาเหมาวัน: ฿<?php echo number_format($booking['price_per_day']); ?></p>
+                            <p class="text-blue-600 font-bold text-sm mt-1">ราคาเหมาวัน: ฿<?php echo number_format($booking['price_per_day'] ?? 0); ?></p>
                         </div>
                     </div>
 
