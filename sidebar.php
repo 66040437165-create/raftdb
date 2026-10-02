@@ -3,29 +3,38 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 if (!isset($conn)) {
-    require_once __DIR__ . '/../db_config.php';
+    require_once __DIR__ . '/db_config.php';
 }
 
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// คำนวณจำนวนรายการที่ "รอตรวจสอบ" อัตโนมัติเพื่อแสดง Badge แจ้งเตือน
-$b_cols_sb = [];
-$chk_cols_sb = $conn->query("SHOW COLUMNS FROM bookings");
-if ($chk_cols_sb) {
-    while ($c = $chk_cols_sb->fetch_assoc()) {
-        $b_cols_sb[] = strtolower($c['Field']);
+// คำนวณจำนวนรายการที่ "รอตรวจสอบ" สำหรับ PostgreSQL เพื่อแสดง Badge แจ้งเตือน
+$pending_count = 0;
+
+if ($conn) {
+    // ดึงรายชื่อคอลัมน์จากตาราง bookings (PostgreSQL Syntax)
+    $res_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
+    $b_cols_sb = [];
+    if ($res_cols) {
+        while ($c = pg_fetch_assoc($res_cols)) {
+            $b_cols_sb[] = strtolower($c['column_name']);
+        }
+    }
+
+    $has_sid_sb = in_array('status_id', $b_cols_sb);
+    $has_txt_sb = in_array('status', $b_cols_sb);
+
+    $cond_sb = [];
+    if ($has_sid_sb) $cond_sb[] = "status_id = 1";
+    if ($has_txt_sb) $cond_sb[] = "status = 'pending'";
+
+    $where_sb = !empty($cond_sb) ? implode(" OR ", $cond_sb) : "1=0";
+
+    $res_badge = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE $where_sb");
+    if ($res_badge && $r = pg_fetch_assoc($res_badge)) {
+        $pending_count = intval($r['cnt']);
     }
 }
-$has_sid_sb = in_array('status_id', $b_cols_sb);
-$has_txt_sb = in_array('status', $b_cols_sb);
-
-$cond_sb = [];
-if ($has_sid_sb) $cond_sb[] = "status_id = 1";
-if ($has_txt_sb) $cond_sb[] = "status = 'pending'";
-$where_sb = !empty($cond_sb) ? implode(" OR ", $cond_sb) : "1=0";
-
-$res_badge = $conn->query("SELECT COUNT(*) as cnt FROM bookings WHERE $where_sb");
-$pending_count = ($res_badge && $r = $res_badge->fetch_assoc()) ? intval($r['cnt']) : 0;
 
 function navClass($page_name, $current_page) {
     return ($current_page === $page_name) 
@@ -50,7 +59,7 @@ function navClass($page_name, $current_page) {
         </a>
         <a href="manage_bookings.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_bookings.php', $current_page); ?>">
             <i class="fa fa-calendar-check w-6 text-center"></i> <span class="ml-2 flex-grow">รายการจอง</span>
-            <?php if($pending_count > 0): ?>
+            <?php if ($pending_count > 0): ?>
                 <span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-lg ml-auto"><?php echo $pending_count; ?></span>
             <?php endif; ?>
         </a>
@@ -80,10 +89,16 @@ function navClass($page_name, $current_page) {
                 <i class="fa fa-cog w-6 text-center"></i> <span class="ml-2">ตั้งค่าระบบ</span>
             </a>
         <?php endif; ?>
+
+        <!-- ปุ่มตอบลูกค้า LINE (เปลี่ยนใช้ FontAwesome fab fa-line ป้องกัน SVG ขยายยักษ์) -->
+        <a href="https://manager.line.biz/" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 px-4 py-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-2 border border-emerald-500/20">
+            <i class="fab fa-line text-xl w-6 text-center"></i>
+            <span>ตอบลูกค้า (LINE)</span>
+        </a>
     </nav>
 
     <div class="p-4 border-t border-slate-800">
-        <a href="../logout.php" class="flex items-center p-3 text-red-400 hover:bg-red-900/20 rounded-xl transition">
+        <a href="logout.php" onclick="return confirm('คุณต้องการออกจากระบบหรือไม่?')" class="flex items-center p-3 text-red-400 hover:bg-red-900/20 rounded-xl transition">
             <i class="fa fa-sign-out-alt w-6 text-center"></i> <span class="ml-2">ออกจากระบบ</span>
         </a>
     </div>
