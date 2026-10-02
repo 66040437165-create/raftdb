@@ -1,14 +1,6 @@
 <?php
 session_start();
-
-// ตรวจสอบตำแหน่งไฟล์ db_config.php ทั้งในโฟลเดอร์เดียวกัน และโฟลเดอร์ก่อนหน้า
-if (file_exists(__DIR__ . '/db_config.php')) {
-    require_once __DIR__ . '/db_config.php';
-} elseif (file_exists(__DIR__ . '/../db_config.php')) {
-    require_once __DIR__ . '/../db_config.php';
-} else {
-    die("ไม่พบไฟล์ db_config.php กรุณาตรวจสอบตำแหน่งไฟล์ในระบบ");
-}
+require_once __DIR__ . '/../db_config.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
