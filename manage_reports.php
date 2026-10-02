@@ -2,12 +2,13 @@
 session_start();
 require_once __DIR__ . '/../db_config.php';
 
+// ตรวจสอบสิทธิ์การเข้าถึงของผู้ดูแลระบบ (Admin)
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
     exit();
 }
 
-// รับค่าฟิลเตอร์
+// รับค่าฟิลเตอร์ Tab
 $selected_tab = $_GET['tab'] ?? 'all'; // all, sales, popularity, status, customers
 
 // ดึงปีที่มียอดการจองเพื่อสร้างดรอปดาวน์ฟิลเตอร์รายปี
@@ -25,19 +26,19 @@ if (empty($years)) {
 }
 
 // ----------------------------------------------------
-// 1. รายงานสรุปยอดการจองและรายได้ (อิง status_id IN (2, 4) และ raft_price)
+// 1. รายงานสรุปยอดการจองและรายได้ (สถานะ 2 = ยืนยันแล้ว, 4 = เสร็จสิ้น)
 // ----------------------------------------------------
 $filter_date = isset($_GET['filter_date']) ? $_GET['filter_date'] : '';
 $filter_month_input = isset($_GET['filter_month']) ? $_GET['filter_month'] : '';
 
-// 2 = ยืนยันแล้ว, 4 = เสร็จสิ้น
 $sales_where = "WHERE (b.status_id = 2 OR b.status_id = 4)";
 $filter_month = '';
 $filter_year = date('Y');
 $months = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
 
 if ($filter_date !== '') {
-    $sales_where .= " AND DATE(b.check_in_date) = '$filter_date'";
+    $escaped_date = $conn->real_escape_string($filter_date);
+    $sales_where .= " AND DATE(b.check_in_date) = '$escaped_date'";
     $filter_month = date('m', strtotime($filter_date));
     $filter_year = date('Y', strtotime($filter_date));
 } elseif ($filter_month_input !== '') {
@@ -51,7 +52,7 @@ if ($filter_date !== '') {
     $sales_where .= " AND YEAR(b.check_in_date) = $filter_year";
 }
 
-// คิวรีดึงข้อมูลสรุป (ใช้ raft_price)
+// คิวรีดึงข้อมูลสรุป
 $summary_sql = "SELECT 
                     COUNT(b.id) as total_count,
                     SUM(b.raft_price) as total_revenue
@@ -91,8 +92,8 @@ if ($breakdown_result && $breakdown_result->num_rows > 0) {
             $label_display = date('d/m/Y', strtotime($row['label']));
         }
         $chart_sales_labels[] = $label_display;
-        $chart_sales_count[] = $row['count'];
-        $chart_sales_revenue[] = $row['revenue'];
+        $chart_sales_count[] = (int)$row['count'];
+        $chart_sales_revenue[] = (float)$row['revenue'];
     }
     $breakdown_result->data_seek(0);
 }
@@ -102,7 +103,7 @@ if ($breakdown_result && $breakdown_result->num_rows > 0) {
 // ----------------------------------------------------
 $popularity_sql = "SELECT r.id as raft_id, r.name as raft_name, r.capacity, r.price_per_day,
                           COUNT(b.id) as total_bookings,
-                          SUM(b.raft_price) as total_revenue
+                          COALESCE(SUM(b.raft_price), 0) as total_revenue
                    FROM rafts r
                    LEFT JOIN bookings b ON r.id = b.raft_id AND (b.status_id = 2 OR b.status_id = 4)
                    GROUP BY r.id
@@ -116,8 +117,8 @@ $chart_pop_revenue = [];
 if ($popularity_result && $popularity_result->num_rows > 0) {
     while ($row = $popularity_result->fetch_assoc()) {
         $chart_pop_labels[] = $row['raft_name'];
-        $chart_pop_count[] = $row['total_bookings'];
-        $chart_pop_revenue[] = $row['total_revenue'];
+        $chart_pop_count[] = (int)$row['total_bookings'];
+        $chart_pop_revenue[] = (float)$row['total_revenue'];
     }
     $popularity_result->data_seek(0);
 }
@@ -169,14 +170,13 @@ if ($customers_result && $customers_result->num_rows > 0) {
     while ($row = $customers_result->fetch_assoc()) {
         if ($count < 10) {
             $chart_cust_labels[] = $row['customer_name'] ?: 'ลูกค้าทั่วไป';
-            $chart_cust_spent[] = $row['total_spent'] ?? 0;
+            $chart_cust_spent[] = (float)($row['total_spent'] ?? 0);
         }
         $count++;
     }
     $customers_result->data_seek(0);
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -204,7 +204,8 @@ if ($customers_result && $customers_result->num_rows > 0) {
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
 
     <!-- Sidebar -->
-    <aside <?php include 'sidebar.php'; ?>
+    <aside>
+        <?php include 'sidebar.php'; ?>
     </aside>
 
     <main class="flex-grow flex flex-col min-w-0">
@@ -249,10 +250,9 @@ if ($customers_result && $customers_result->num_rows > 0) {
                 <p class="text-xs text-gray-400 mt-2">พิมพ์โดยผู้ดูแลระบบ ณ วันที่: <?php echo date('d/m/Y H:i:s'); ?></p>
             </div>
 
-            <!-- TAB ALL: ALL CHARTS DASHBOARD OVERVIEW -->
+            <!-- TAB ALL: OVERVIEW DASHBOARD -->
             <?php if ($selected_tab === 'all'): ?>
                 <div class="space-y-8 mb-8">
-                    <!-- Banner -->
                     <div class="bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 rounded-3xl p-6 md:p-8 text-white shadow-xl relative overflow-hidden">
                         <div class="relative z-10">
                             <span class="inline-block bg-blue-500/20 text-blue-300 text-xs px-3.5 py-1.5 rounded-full font-bold uppercase mb-2 border border-blue-400/30">📊</span>
@@ -261,7 +261,6 @@ if ($customers_result && $customers_result->num_rows > 0) {
                         </div>
                     </div>
 
-                    <!-- Quick Stats Cards -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
                             <div>
@@ -296,9 +295,7 @@ if ($customers_result && $customers_result->num_rows > 0) {
                         </div>
                     </div>
 
-                    <!-- 2x2 Grid for All 4 Charts -->
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <!-- Chart 1: Sales & Revenue -->
                         <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                             <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
                                 <h3 class="text-base font-bold text-gray-800 flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-emerald-500"></span> 1. สรุปยอดจองและรายได้</h3>
@@ -307,16 +304,14 @@ if ($customers_result && $customers_result->num_rows > 0) {
                             <div class="relative h-72 w-full"><canvas id="salesChart"></canvas></div>
                         </div>
 
-                        <!-- Chart 2: Raft Popularity -->
                         <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                             <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
                                 <h3 class="text-base font-bold text-gray-800 flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-blue-500"></span> 2. สถิติแพที่ได้รับความนิยมสูงสุด</h3>
                                 <a href="?tab=popularity" class="text-xs text-blue-600 hover:underline font-bold">ดูเพิ่มเติม <i class="fa fa-arrow-right"></i></a>
                             </div>
-                            <div class="relative h-96 w-full"><canvas id="popularityChart"></canvas></div>
+                            <div class="relative h-72 w-full"><canvas id="popularityChart"></canvas></div>
                         </div>
 
-                        <!-- Chart 3: Raft Status -->
                         <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                             <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
                                 <h3 class="text-base font-bold text-gray-800 flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-indigo-500"></span> 3. สัดส่วนสถานะการใช้งานแพ</h3>
@@ -325,7 +320,6 @@ if ($customers_result && $customers_result->num_rows > 0) {
                             <div class="relative h-72 w-full flex items-center justify-center"><canvas id="statusChart"></canvas></div>
                         </div>
 
-                        <!-- Chart 4: Top Customers Spent -->
                         <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                             <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
                                 <h3 class="text-base font-bold text-gray-800 flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-amber-500"></span> 4. สถิตียอดใช้จ่ายลูกค้าสูงสุด</h3>
@@ -345,7 +339,7 @@ if ($customers_result && $customers_result->num_rows > 0) {
                             <input type="hidden" name="tab" value="sales">
                             <div>
                                 <label class="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">ดูรายงานประจำวัน</label>
-                                <input type="date" name="filter_date" value="<?php echo $filter_date; ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-bold text-slate-700">
+                                <input type="date" name="filter_date" value="<?php echo htmlspecialchars($filter_date); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-bold text-slate-700">
                             </div>
                             <div>
                                 <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl shadow-lg transition"><i class="fa fa-filter mr-1"></i> กรองข้อมูล</button>
@@ -501,7 +495,11 @@ if ($customers_result && $customers_result->num_rows > 0) {
                                     <td class="p-4 text-slate-800"><?php echo htmlspecialchars($row['name']); ?></td>
                                     <td class="p-4 text-center"><?php echo $row['capacity']; ?></td>
                                     <td class="p-4 text-right">฿<?php echo number_format($row['price_per_day']); ?></td>
-                                    <td class="p-4 text-center"><span class="<?php echo $badge_class; ?> px-3 py-1 rounded-full text-[10px] font-black uppercase"><?php echo $badge_label; ?></span></td>
+                                    <td class="p-4 text-center">
+                                        <span class="px-3 py-1 rounded-full text-xs font-black <?php echo $badge_class; ?>">
+                                            <?php echo $badge_label; ?>
+                                        </span>
+                                    </td>
                                 </tr>
                                 <?php endwhile; else: ?>
                                 <tr><td colspan="5" class="p-10 text-center text-gray-400">ไม่พบข้อมูลแพ</td></tr>
@@ -512,34 +510,40 @@ if ($customers_result && $customers_result->num_rows > 0) {
                 </div>
             <?php endif; ?>
 
-            <!-- TAB 4: CUSTOMER HISTORY REPORT -->
+            <!-- TAB 4: CUSTOMERS HISTORY REPORT -->
             <?php if ($selected_tab === 'customers'): ?>
                 <div class="print-card bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 mb-8">
                     <div class="no-print bg-slate-50 p-6 rounded-2xl mb-8 border border-slate-100">
-                        <form method="GET" class="flex gap-4">
+                        <form method="GET" class="flex flex-col md:flex-row gap-4 items-end">
                             <input type="hidden" name="tab" value="customers">
-                            <div class="relative flex-grow">
-                                <input type="text" name="cust_search" value="<?php echo htmlspecialchars($cust_search); ?>" placeholder="ค้นหาชื่อลูกค้า หรือ เบอร์โทรศัพท์..." class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 pl-10 outline-none font-bold text-slate-700">
-                                <i class="fa fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                            <div class="flex-grow w-full">
+                                <label class="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">ค้นหาชื่อ หรือ เบอร์โทรลูกค้า</label>
+                                <input type="text" name="cust_search" value="<?php echo htmlspecialchars($cust_search); ?>" placeholder="พิมพ์ชื่อหรือเบอร์โทรศัพท์..." class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-bold text-slate-700">
                             </div>
-                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-xl shadow-lg transition">ค้นหา</button>
+                            <div class="w-full md:w-auto flex gap-2">
+                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-xl shadow-lg transition"><i class="fa fa-search mr-1"></i> ค้นหา</button>
+                                <a href="manage_reports.php?tab=customers" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center">ล้าง</a>
+                            </div>
                         </form>
                     </div>
 
                     <div class="mb-8 p-6 bg-white border border-gray-100 rounded-3xl shadow-sm">
+                        <h3 class="text-sm font-bold text-gray-700 mb-4">กราฟแสดง 10 อันดับลูกค้าที่มียอดใช้จ่ายสะสมสูงสุด</h3>
                         <div class="relative h-72 w-full"><canvas id="customersChart"></canvas></div>
                     </div>
 
-                    <h2 class="text-lg font-bold text-gray-800 mb-4 border-l-4 border-indigo-500 pl-3">ประวัติความถี่และยอดใช้จ่ายสะสมของลูกค้า</h2>
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 border-l-4 border-amber-500 pl-3">ประวัติพฤติกรรมการใช้บริการของลูกค้า</h2>
                     <div class="overflow-x-auto border border-gray-100 rounded-2xl">
                         <table class="w-full text-left">
                             <thead class="bg-slate-50 text-[10px] font-black text-slate-400 tracking-wider border-b border-slate-100">
                                 <tr>
-                                    <th class="p-4">ชื่อลูกค้า</th>
+                                    <th class="p-4">ชื่อ-นามสกุล</th>
                                     <th class="p-4">เบอร์โทรศัพท์</th>
                                     <th class="p-4">อีเมล</th>
-                                    <th class="p-4 text-center">จองแพ (ครั้ง)</th>
-                                    <th class="p-4 text-right">ยอดเงินรวม (บาท)</th>
+                                    <th class="p-4 text-center">จองสะสม (ครั้ง)</th>
+                                    <th class="p-4 text-right">ยอดรวม (บาท)</th>
+                                    <th class="p-4 text-right">เฉลี่ย/ครั้ง</th>
+                                    <th class="p-4 text-center">จองล่าสุด</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100 text-sm font-bold text-slate-600">
@@ -549,13 +553,15 @@ if ($customers_result && $customers_result->num_rows > 0) {
                                 ?>
                                 <tr class="hover:bg-slate-50">
                                     <td class="p-4 text-slate-800"><?php echo htmlspecialchars($row['customer_name'] ?: 'ลูกค้าทั่วไป'); ?></td>
-                                    <td class="p-4"><?php echo htmlspecialchars($row['customer_tel'] ?? '-'); ?></td>
-                                    <td class="p-4 font-normal text-slate-500"><?php echo htmlspecialchars($row['customer_email'] ?? '-'); ?></td>
-                                    <td class="p-4 text-center text-indigo-600 font-black"><?php echo number_format($row['total_bookings']); ?></td>
-                                    <td class="p-4 text-right text-emerald-600 font-black">฿<?php echo number_format($row['total_spent']); ?></td>
+                                    <td class="p-4 text-slate-500"><?php echo htmlspecialchars($row['customer_tel'] ?: '-'); ?></td>
+                                    <td class="p-4 text-slate-500"><?php echo htmlspecialchars($row['customer_email'] ?: '-'); ?></td>
+                                    <td class="p-4 text-center text-blue-600 font-black"><?php echo number_format($row['total_bookings']); ?></td>
+                                    <td class="p-4 text-right text-emerald-600">฿<?php echo number_format($row['total_spent']); ?></td>
+                                    <td class="p-4 text-right text-slate-700">฿<?php echo number_format($row['avg_spent']); ?></td>
+                                    <td class="p-4 text-center text-xs text-slate-400"><?php echo $row['last_booking'] ? date('d/m/Y', strtotime($row['last_booking'])) : '-'; ?></td>
                                 </tr>
                                 <?php endwhile; else: ?>
-                                <tr><td colspan="5" class="p-10 text-center text-gray-400">ไม่พบประวัติลูกค้า</td></tr>
+                                <tr><td colspan="7" class="p-10 text-center text-gray-400">ไม่พบประวัติลูกค้า</td></tr>
                                 <?php endif; ?>
                             </tbody>
                         </table>
@@ -568,74 +574,147 @@ if ($customers_result && $customers_result->num_rows > 0) {
 
     <script>
         function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('-translate-x-full');
-            document.getElementById('sidebarOverlay').classList.toggle('hidden');
+            const sidebar = document.querySelector('aside');
+            const overlay = document.getElementById('sidebarOverlay');
+            if (sidebar) {
+                sidebar.classList.toggle('sidebar-active');
+                if (overlay) overlay.classList.toggle('hidden');
+            }
         }
 
-        Chart.defaults.font.family = "'Sarabun', sans-serif";
-        const selectedTab = "<?php echo $selected_tab; ?>";
+        const chartSalesLabels = <?php echo json_encode($chart_sales_labels); ?>;
+        const chartSalesCount = <?php echo json_encode($chart_sales_count); ?>;
+        const chartSalesRevenue = <?php echo json_encode($chart_sales_revenue); ?>;
 
-        // Tab 1: Sales Chart
-        if ((selectedTab === 'all' || selectedTab === 'sales') && document.getElementById('salesChart')) {
-            const ctxSales = document.getElementById('salesChart').getContext('2d');
-            new Chart(ctxSales, {
-                type: 'bar',
-                data: {
-                    labels: <?php echo json_encode($chart_sales_labels); ?>,
-                    datasets: [
-                        { label: 'รายได้ (บาท)', data: <?php echo json_encode($chart_sales_revenue); ?>, backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: 'rgb(16, 185, 129)', borderWidth: 2, yAxisID: 'y' },
-                        { label: 'จำนวนการจอง (ครั้ง)', data: <?php echo json_encode($chart_sales_count); ?>, type: 'line', backgroundColor: 'rgb(59, 130, 246)', borderColor: 'rgb(59, 130, 246)', borderWidth: 3, tension: 0.3, yAxisID: 'y1' }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'รายได้ (บาท)' } },
-                        y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'จำนวนครั้ง' } }
+        const chartPopLabels = <?php echo json_encode($chart_pop_labels); ?>;
+        const chartPopCount = <?php echo json_encode($chart_pop_count); ?>;
+        const chartPopRevenue = <?php echo json_encode($chart_pop_revenue); ?>;
+
+        const statsAvailable = <?php echo $stats_available; ?>;
+        const statsBusy = <?php echo $stats_busy; ?>;
+        const statsMaintenance = <?php echo $stats_maintenance; ?>;
+
+        const chartCustLabels = <?php echo json_encode($chart_cust_labels); ?>;
+        const chartCustSpent = <?php echo json_encode($chart_cust_spent); ?>;
+
+        document.addEventListener("DOMContentLoaded", function () {
+            
+            // 1. Sales Chart
+            const ctxSales = document.getElementById('salesChart');
+            if (ctxSales) {
+                new Chart(ctxSales.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: chartSalesLabels,
+                        datasets: [
+                            {
+                                label: 'รายได้ (บาท)',
+                                data: chartSalesRevenue,
+                                borderColor: '#10b981',
+                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                fill: true,
+                                yAxisID: 'y1',
+                                tension: 0.3
+                            },
+                            {
+                                label: 'จำนวนการจอง (ครั้ง)',
+                                data: chartSalesCount,
+                                borderColor: '#3b82f6',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                fill: true,
+                                yAxisID: 'y',
+                                tension: 0.3
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { type: 'linear', position: 'left', title: { display: true, text: 'จำนวนครั้ง' }, grid: { display: false } },
+                            y1: { type: 'linear', position: 'right', title: { display: true, text: 'บาท' }, grid: { drawOnChartArea: false } }
+                        }
                     }
-                }
-            });
-        }
+                });
+            }
 
-        // Tab 2: Popularity Chart
-        if ((selectedTab === 'all' || selectedTab === 'popularity') && document.getElementById('popularityChart')) {
-            const ctxPop = document.getElementById('popularityChart').getContext('2d');
-            new Chart(ctxPop, {
-                type: 'bar',
-                data: {
-                    labels: <?php echo json_encode($chart_pop_labels); ?>,
-                    datasets: [{ label: 'จำนวนครั้งที่ถูกจอง', data: <?php echo json_encode($chart_pop_count); ?>, backgroundColor: 'rgba(59, 130, 246, 0.7)', borderRadius: 6 }]
-                },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-            });
-        }
+            // 2. Popularity Chart
+            const ctxPop = document.getElementById('popularityChart');
+            if (ctxPop) {
+                new Chart(ctxPop.getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: chartPopLabels,
+                        datasets: [
+                            {
+                                label: 'จำนวนการจอง (ครั้ง)',
+                                data: chartPopCount,
+                                backgroundColor: '#3b82f6',
+                                borderRadius: 8
+                            },
+                            {
+                                label: 'รายได้สะสม (บาท)',
+                                data: chartPopRevenue,
+                                backgroundColor: '#10b981',
+                                borderRadius: 8
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: { legend: { position: 'top' } }
+                    }
+                });
+            }
 
-        // Tab 3: Status Chart
-        if ((selectedTab === 'all' || selectedTab === 'status') && document.getElementById('statusChart')) {
-            const ctxStatus = document.getElementById('statusChart').getContext('2d');
-            new Chart(ctxStatus, {
-                type: 'pie',
-                data: {
-                    labels: ['แพว่าง', 'ไม่ว่าง/ติดจอง', 'ปิดปรับปรุง'],
-                    datasets: [{ data: [<?php echo $stats_available; ?>, <?php echo $stats_busy; ?>, <?php echo $stats_maintenance; ?>], backgroundColor: ['rgba(16, 185, 129, 0.8)', 'rgba(59, 130, 246, 0.8)', 'rgba(244, 63, 94, 0.8)'] }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
-            });
-        }
+            // 3. Status Chart
+            const ctxStatus = document.getElementById('statusChart');
+            if (ctxStatus) {
+                new Chart(ctxStatus.getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['แพว่าง', 'ไม่ว่าง/ติดจอง', 'ปิดปรับปรุง'],
+                        datasets: [{
+                            data: [statsAvailable, statsBusy, statsMaintenance],
+                            backgroundColor: ['#10b981', '#3b82f6', '#f43f5e'],
+                            borderWidth: 2,
+                            borderColor: '#ffffff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'bottom' } }
+                    }
+                });
+            }
 
-        // Tab 4: Customers Chart
-        if ((selectedTab === 'all' || selectedTab === 'customers') && document.getElementById('customersChart')) {
-            const ctxCust = document.getElementById('customersChart').getContext('2d');
-            new Chart(ctxCust, {
-                type: 'bar',
-                data: {
-                    labels: <?php echo json_encode($chart_cust_labels); ?>,
-                    datasets: [{ label: 'ยอดใช้จ่ายสะสม (บาท)', data: <?php echo json_encode($chart_cust_spent); ?>, backgroundColor: 'rgba(99, 102, 241, 0.6)', borderRadius: 6 }]
-                },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-            });
-        }
+            // 4. Customers Chart
+            const ctxCust = document.getElementById('customersChart');
+            if (ctxCust) {
+                new Chart(ctxCust.getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: chartCustLabels,
+                        datasets: [{
+                            label: 'ยอดใช้จ่ายรวม (บาท)',
+                            data: chartCustSpent,
+                            backgroundColor: '#f59e0b',
+                            borderRadius: 8
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>
