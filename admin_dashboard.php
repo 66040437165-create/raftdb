@@ -1,24 +1,33 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 // 1. ตรวจสอบว่าล็อกอินแล้วหรือยัง (ทั้ง Admin และ Staff เข้าใช้งาน Dashboard ได้)
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
 $is_admin = isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1;
 
-// 2. ดึงข้อมูลสถิติพื้นฐานสำหรับการดำเนินงาน (Admin และ Staff ดูได้)
-$res_rafts = $conn->query("SELECT COUNT(*) as total FROM rafts");
-$total_rafts = ($res_rafts && $row = $res_rafts->fetch_assoc()) ? intval($row['total']) : 0;
+// 2. ดึงข้อมูลสถิติพื้นฐานสำหรับการดำเนินงาน (PostgreSQL Syntax)
+$total_rafts = 0;
+$res_rafts = @pg_query($conn, "SELECT COUNT(*) as total FROM rafts");
+if ($res_rafts && $row = pg_fetch_assoc($res_rafts)) {
+    $total_rafts = intval($row['total']);
+}
 
-$res_users = $conn->query("SELECT COUNT(*) as total FROM customers");
-$total_users = ($res_users && $row = $res_users->fetch_assoc()) ? intval($row['total']) : 0;
+$total_users = 0;
+$res_users = @pg_query($conn, "SELECT COUNT(*) as total FROM customers");
+if ($res_users && $row = pg_fetch_assoc($res_users)) {
+    $total_users = intval($row['total']);
+}
 
-$res_pending = $conn->query("SELECT COUNT(*) as total FROM bookings WHERE status = 'pending'");
-$pending_bookings = ($res_pending && $row = $res_pending->fetch_assoc()) ? intval($row['total']) : 0;
+$pending_bookings = 0;
+$res_pending = @pg_query($conn, "SELECT COUNT(*) as total FROM bookings WHERE status = 'pending'");
+if ($res_pending && $row = pg_fetch_assoc($res_pending)) {
+    $pending_bookings = intval($row['total']);
+}
 
 // 3. คำนวณรายได้และรายจ่าย (ดึงเฉพาะเมื่อเป็น Admin เท่านั้น)
 $income_today  = 0;
@@ -30,23 +39,31 @@ if ($is_admin) {
     $today = date('Y-m-d');
     $this_month = date('Y-m');
 
-    // คำนวณรายได้
-    $res_inc_today = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
-    $income_today = ($res_inc_today && $row = $res_inc_today->fetch_assoc()) ? floatval($row['total']) : 0;
+    // คำนวณรายได้ (PostgreSQL Syntax)
+    $res_inc_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
+    if ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) {
+        $income_today = floatval($row['total']);
+    }
 
-    $res_inc_month = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND paid_at LIKE '$this_month%'");
-    $income_month = ($res_inc_month && $row = $res_inc_month->fetch_assoc()) ? floatval($row['total']) : 0;
+    $res_inc_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
+    if ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) {
+        $income_month = floatval($row['total']);
+    }
 
-    // คำนวณรายจ่าย
-    $res_exp_today = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
-    $expense_today = ($res_exp_today && $row = $res_exp_today->fetch_assoc()) ? floatval($row['total']) : 0;
+    // คำนวณรายจ่าย (PostgreSQL Syntax)
+    $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
+    if ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) {
+        $expense_today = floatval($row['total']);
+    }
 
-    $res_exp_month = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date LIKE '$this_month%'");
-    $expense_month = ($res_exp_month && $row = $res_exp_month->fetch_assoc()) ? floatval($row['total']) : 0;
+    $res_exp_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
+    if ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) {
+        $expense_month = floatval($row['total']);
+    }
 }
 
-// 4. ดึงรายการจอง 5 รายการล่าสุด
-$recent_bookings = $conn->query("
+// 4. ดึงรายการจอง 5 รายการล่าสุด (PostgreSQL Syntax)
+$recent_bookings = @pg_query($conn, "
     SELECT b.*, r.raft_name, 
            COALESCE(c.customer_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
            p.amount as paid_amount, p.status as payment_status
@@ -65,7 +82,7 @@ $recent_bookings = $conn->query("
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ระบบหลังบ้าน - ChillRaft</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Sarabun', sans-serif; }
@@ -94,13 +111,13 @@ $recent_bookings = $conn->query("
             </div>
             <div class="flex items-center space-x-3">
                 <div class="text-right hidden sm:block">
-                    <p class="text-xs md:text-sm font-bold text-gray-700"><?php echo htmlspecialchars($_SESSION['fullname'] ?? $_SESSION['username']); ?></p>
+                    <p class="text-xs md:text-sm font-bold text-gray-700"><?php echo htmlspecialchars($_SESSION['fullname'] ?? $_SESSION['username'] ?? 'User'); ?></p>
                     <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full <?php echo $is_admin ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'; ?>">
                         <?php echo $is_admin ? 'ผู้ดูแลระบบ (Admin)' : 'พนักงาน (Staff)'; ?>
                     </span>
                 </div>
                 <div class="w-9 h-9 md:w-10 md:h-10 <?php echo $is_admin ? 'bg-amber-500' : 'bg-blue-500'; ?> rounded-full flex items-center justify-center text-white font-bold text-base shadow-sm">
-                    <?php echo mb_substr($_SESSION['fullname'] ?? 'U', 0, 1); ?>
+                    <?php echo mb_substr($_SESSION['fullname'] ?? $_SESSION['username'] ?? 'U', 0, 1); ?>
                 </div>
             </div>
         </header>
@@ -224,8 +241,8 @@ $recent_bookings = $conn->query("
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-50 text-sm">
-                            <?php if ($recent_bookings && $recent_bookings->num_rows > 0): ?>
-                                <?php while($row = $recent_bookings->fetch_assoc()): 
+                            <?php if ($recent_bookings && pg_num_rows($recent_bookings) > 0): ?>
+                                <?php while($row = pg_fetch_assoc($recent_bookings)): 
                                     $booker = !empty($row['guest_name']) ? $row['guest_name'] : ($row['customer_name'] ?? 'ลูกค้าทั่วไป');
                                     $status_map = [
                                         'pending'   => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
