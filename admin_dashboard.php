@@ -1,10 +1,10 @@
 <?php
 session_start();
-require_once 'db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 // 1. ตรวจสอบว่าล็อกอินแล้วหรือยัง (ทั้ง Admin และ Staff เข้าใช้งาน Dashboard ได้)
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
@@ -16,18 +16,20 @@ $total_users = 0;
 $pending_bookings = 0;
 
 if ($conn) {
+    // นับจำนวนแพทั้งหมด
     $res_rafts = @pg_query($conn, "SELECT COUNT(*) as total FROM rafts");
     if ($res_rafts && $row = pg_fetch_assoc($res_rafts)) {
         $total_rafts = intval($row['total']);
     }
 
+    // นับจำนวนสมาชิก/ลูกค้า
     $res_users = @pg_query($conn, "SELECT COUNT(*) as total FROM customers");
     if ($res_users && $row = pg_fetch_assoc($res_users)) {
         $total_users = intval($row['total']);
     }
 
-    // สถานะรอตรวจสอบ (status_id = 1)
-    $res_pending = @pg_query($conn, "SELECT COUNT(*) as total FROM bookings WHERE status_id = 1");
+    // นับรายการรอตรวจสอบ (รองรับทั้ง status_id = 1 และ status = 'pending')
+    $res_pending = @pg_query($conn, "SELECT COUNT(*) as total FROM bookings WHERE status_id = 1 OR status = 'pending'");
     if ($res_pending && $row = pg_fetch_assoc($res_pending)) {
         $pending_bookings = intval($row['total']);
     }
@@ -43,23 +45,25 @@ if ($is_admin && $conn) {
     $today = date('Y-m-d');
     $this_month = date('Y-m');
 
-    // คำนวณรายได้ (PostgreSQL syntax)
+    // คำนวณรายได้วันนี้
     $res_inc_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND paid_at::date = '$today'::date");
     if ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) {
         $income_today = floatval($row['total']);
     }
 
+    // คำนวณรายได้เดือนนี้ (ใช้ TO_CHAR สำหรับ PostgreSQL)
     $res_inc_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
     if ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) {
         $income_month = floatval($row['total']);
     }
 
-    // คำนวณรายจ่าย
-    $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
+    // คำนวณรายจ่ายวันนี้
+    $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date::date = '$today'::date");
     if ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) {
         $expense_today = floatval($row['total']);
     }
 
+    // คำนวณรายจ่ายเดือนนี้
     $res_exp_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
     if ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) {
         $expense_month = floatval($row['total']);
@@ -67,10 +71,11 @@ if ($is_admin && $conn) {
 }
 
 // 4. ดึงรายการจอง 5 รายการล่าสุด
-$recent_bookings = null;
+$recent_bookings = [];
 if ($conn) {
     $sql_recent = "
-        SELECT b.*, r.name as raft_name, 
+        SELECT b.*, 
+               COALESCE(r.name, '') as raft_name, 
                COALESCE(b.guest_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
                p.amount as paid_amount, p.status as payment_status
         FROM bookings b
@@ -79,7 +84,12 @@ if ($conn) {
         LEFT JOIN payments p ON b.id = p.booking_id
         ORDER BY b.id DESC LIMIT 5
     ";
-    $recent_bookings = @pg_query($conn, $sql_recent);
+    $res_recent = @pg_query($conn, $sql_recent);
+    if ($res_recent) {
+        while ($row = pg_fetch_assoc($res_recent)) {
+            $recent_bookings[] = $row;
+        }
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -177,25 +187,25 @@ if ($conn) {
                     <i class="fa fa-wallet text-slate-400"></i> ข้อมูลสรุปการเงิน (เฉพาะผู้ดูแลระบบ)
                 </h3>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                    <a href="manage_finances.php?filter=income_today" class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-emerald-500 hover:shadow-md transition block">
+                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-emerald-500">
                         <p class="text-xs text-gray-400 font-bold uppercase">รายได้วันนี้</p>
-                        <h3 class="text-xl font-black text-emerald-600 mt-1">฿<span id="income_today"><?php echo number_format($income_today, 2); ?></span></h3>
-                    </a>
+                        <h3 class="text-xl font-black text-emerald-600 mt-1">฿<span><?php echo number_format($income_today, 2); ?></span></h3>
+                    </div>
 
-                    <a href="manage_finances.php?filter=expense_today" class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-rose-500 hover:shadow-md transition block">
+                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-rose-500">
                         <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายวันนี้</p>
-                        <h3 class="text-xl font-black text-rose-600 mt-1">฿<span id="expense_today"><?php echo number_format($expense_today, 2); ?></span></h3>
-                    </a>
+                        <h3 class="text-xl font-black text-rose-600 mt-1">฿<span><?php echo number_format($expense_today, 2); ?></span></h3>
+                    </div>
 
-                    <a href="manage_finances.php?filter=income_month" class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-indigo-500 hover:shadow-md transition block">
+                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-indigo-500">
                         <p class="text-xs text-gray-400 font-bold uppercase">รายได้เดือนนี้</p>
-                        <h3 class="text-xl font-black text-indigo-600 mt-1">฿<span id="income_month"><?php echo number_format($income_month, 2); ?></span></h3>
-                    </a>
+                        <h3 class="text-xl font-black text-indigo-600 mt-1">฿<span><?php echo number_format($income_month, 2); ?></span></h3>
+                    </div>
 
-                    <a href="manage_finances.php?filter=expense_month" class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-slate-700 hover:shadow-md transition block">
+                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-slate-700">
                         <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายเดือนนี้</p>
-                        <h3 class="text-xl font-black text-slate-700 mt-1">฿<span id="expense_month"><?php echo number_format($expense_month, 2); ?></span></h3>
-                    </a>
+                        <h3 class="text-xl font-black text-slate-700 mt-1">฿<span><?php echo number_format($expense_month, 2); ?></span></h3>
+                    </div>
                 </div>
             </div>
             <?php endif; ?>
@@ -248,40 +258,43 @@ if ($conn) {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-50 text-sm">
-                            <?php if ($recent_bookings && pg_num_rows($recent_bookings) > 0): ?>
-                                <?php while($row = pg_fetch_assoc($recent_bookings)): 
+                            <?php if (!empty($recent_bookings)): ?>
+                                <?php foreach ($recent_bookings as $row): 
                                     $booker = !empty($row['guest_name']) ? $row['guest_name'] : ($row['customer_name'] ?? 'ลูกค้าทั่วไป');
                                     
-                                    // รองรับทั้ง status_id และ string status
                                     $status_map = [
                                         '1'         => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
                                         '2'         => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
-                                        '3'         => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
-                                        '4'         => ['bg-rose-100 text-rose-700', 'ยกเลิก'],
+                                        '3'         => ['bg-rose-100 text-rose-700', 'ยกเลิก'],
+                                        '4'         => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
                                         'pending'   => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
-                                        'confirmed' => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว']
+                                        'confirmed' => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
+                                        'completed' => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
+                                        'cancelled' => ['bg-rose-100 text-rose-700', 'ยกเลิก']
                                     ];
                                     $st_key = (string)($row['status_id'] ?? $row['status'] ?? '1');
                                     $badge = $status_map[$st_key] ?? ['bg-gray-100 text-gray-700', 'รอตรวจสอบ'];
 
-                                    $checkin_display = !empty($row['check_in_date']) ? date('d/m/Y', strtotime($row['check_in_date'])) : '-';
+                                    $checkin_display = !empty($row['check_in_date']) ? date('d/m/Y', strtotime($row['check_in_date'])) : (!empty($row['check_in']) ? date('d/m/Y', strtotime($row['check_in'])) : '-');
                                     if (!empty($row['check_in_time'])) {
                                         $checkin_display .= ' ' . substr($row['check_in_time'], 0, 5);
                                     }
+                                    $booking_code = $row['booking_code'] ?? ('#' . str_pad($row['id'], 6, '0', STR_PAD_LEFT));
+                                    $total_price = $row['total_amount'] ?? $row['total_price'] ?? $row['paid_amount'] ?? 0;
                                 ?>
                                 <tr class="hover:bg-slate-50 transition">
                                     <td class="p-4 font-mono font-bold text-blue-600">
-                                        <?php echo htmlspecialchars($row['booking_code'] ?? ('#' . str_pad($row['id'], 6, '0', STR_PAD_LEFT))); ?>
+                                        <?php echo htmlspecialchars($booking_code); ?>
                                     </td>
                                     <td class="p-4 font-bold text-slate-700"><?php echo htmlspecialchars($booker); ?></td>
                                     <td class="p-4 text-slate-600"><?php echo htmlspecialchars($row['raft_name'] ?? '-'); ?></td>
                                     <td class="p-4 text-slate-500"><?php echo $checkin_display; ?></td>
-                                    <td class="p-4 font-bold text-emerald-600">฿<?php echo number_format($row['total_amount'] ?? 0); ?></td>
+                                    <td class="p-4 font-bold text-emerald-600">฿<?php echo number_format($total_price); ?></td>
                                     <td class="p-4 text-center">
                                         <span class="px-3 py-1 rounded-full text-xs font-bold <?php echo $badge[0]; ?>"><?php echo $badge[1]; ?></span>
                                     </td>
                                 </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr><td colspan="6" class="p-8 text-center text-slate-400">ยังไม่มีรายการจองในระบบ</td></tr>
                             <?php endif; ?>
