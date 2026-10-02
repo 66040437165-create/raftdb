@@ -1,14 +1,14 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../login.php");
+    header("Location: login.php");
     exit();
 }
 
 // 2. ระบบอัปเดตสถานะการจอง (พร้อมปรับสถานะแพ และสถานะ payment อัตโนมัติ)
-if (isset($_GET['id']) && isset($_GET['status'])) {
+if (isset($_GET['id']) && isset($_GET['status']) && $conn) {
     $id = intval($_GET['id']);
     $status = trim($_GET['status']);
     
@@ -21,54 +21,53 @@ if (isset($_GET['id']) && isset($_GET['status'])) {
 
     if (array_key_exists($status, $status_map)) {
         $status_id = $status_map[$status];
-        $conn->begin_transaction();
+        @pg_query($conn, "BEGIN");
         try {
             // ดึง raft_id ของการจองนี้
-            $stmt_raft = $conn->prepare("SELECT raft_id FROM bookings WHERE id = ?");
-            $stmt_raft->bind_param("i", $id);
-            $stmt_raft->execute();
-            $raft_res = $stmt_raft->get_result()->fetch_assoc();
+            $stmt_raft = @pg_query_params($conn, "SELECT raft_id FROM bookings WHERE id = $1 LIMIT 1", array($id));
+            $raft_res = $stmt_raft ? pg_fetch_assoc($stmt_raft) : null;
             $raft_id = intval($raft_res['raft_id'] ?? 0);
-            $stmt_raft->close();
 
+            // ตรวจสอบคอลัมน์ใน bookings
             $b_cols = [];
-            $chk_cols = $conn->query("SHOW COLUMNS FROM bookings");
+            $chk_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
             if ($chk_cols) {
-                while ($c = $chk_cols->fetch_assoc()) {
-                    $b_cols[] = strtolower($c['Field']);
+                while ($c = pg_fetch_assoc($chk_cols)) {
+                    $b_cols[] = strtolower($c['column_name']);
                 }
             }
 
             if (in_array('status_id', $b_cols)) {
-                $conn->query("UPDATE bookings SET status_id = $status_id WHERE id = $id");
+                @pg_query_params($conn, "UPDATE bookings SET status_id = $1 WHERE id = $2", array($status_id, $id));
             }
             if (in_array('status', $b_cols)) {
-                $conn->query("UPDATE bookings SET status = '$status' WHERE id = $id");
+                @pg_query_params($conn, "UPDATE bookings SET status = $1 WHERE id = $2", array($status, $id));
             }
 
             // จัดการตาราง payments (ถ้ามี)
-            $chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
-            if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
+            $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
+            $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
+            if ($has_pay) {
                 $admin_id = intval($_SESSION['user_id'] ?? 1);
                 if ($status === 'confirmed') {
-                    @$conn->query("UPDATE payments SET status = 'confirmed', verified_at = NOW(), verified_by = $admin_id WHERE booking_id = $id");
+                    @pg_query_params($conn, "UPDATE payments SET status = 'confirmed', verified_at = NOW(), verified_by = $1 WHERE booking_id = $2", array($admin_id, $id));
                 } elseif ($status === 'cancelled') {
-                    @$conn->query("UPDATE payments SET status = 'cancelled' WHERE booking_id = $id");
+                    @pg_query_params($conn, "UPDATE payments SET status = 'cancelled' WHERE booking_id = $1", array($id));
                 }
             }
 
-            // ⛵ ปรับสถานะแพในตาราง rafts ทันที
+            // ปรับสถานะแพในตาราง rafts
             if ($raft_id > 0) {
                 if ($status === 'confirmed') {
-                    $conn->query("UPDATE rafts SET status = 'busy' WHERE id = $raft_id");
+                    @pg_query_params($conn, "UPDATE rafts SET status = 'busy' WHERE id = $1", array($raft_id));
                 } elseif ($status === 'cancelled' || $status === 'completed') {
-                    $conn->query("UPDATE rafts SET status = 'available' WHERE id = $raft_id");
+                    @pg_query_params($conn, "UPDATE rafts SET status = 'available' WHERE id = $1", array($raft_id));
                 }
             }
 
-            $conn->commit();
+            @pg_query($conn, "COMMIT");
 
-            // 🟢 ตรวจสอบว่าเป็นการส่งแบบ AJAX หรือไม่ ถ้าใช่ให้ส่ง JSON กลับ
+            // ตรวจสอบว่าเป็นการส่งแบบ AJAX หรือไม่
             if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                 echo json_encode(['status' => 'success']);
                 exit();
@@ -77,7 +76,7 @@ if (isset($_GET['id']) && isset($_GET['status'])) {
             header("Location: manage_bookings.php?msg=updated");
             exit();
         } catch (Exception $e) {
-            $conn->rollback();
+            @pg_query($conn, "ROLLBACK");
             
             if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                 echo json_encode(['status' => 'error', 'msg' => $e->getMessage()]);
@@ -90,73 +89,88 @@ if (isset($_GET['id']) && isset($_GET['status'])) {
 }
 
 // 3. ระบบลบข้อมูลการจอง
-if (isset($_GET['delete_id'])) {
+if (isset($_GET['delete_id']) && $conn) {
     $delete_id = intval($_GET['delete_id']);
     
-    $chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
-    if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
-        $res_pay = $conn->query("SELECT slip_image FROM payments WHERE booking_id = $delete_id");
+    $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
+    $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
+    if ($has_pay) {
+        $res_pay = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id = $1", array($delete_id));
         if ($res_pay) {
-            while ($p_data = $res_pay->fetch_assoc()) {
+            while ($p_data = pg_fetch_assoc($res_pay)) {
                 if (!empty($p_data['slip_image'])) {
-                    $file_path = "../uploads/slips/" . $p_data['slip_image'];
+                    $file_path = "uploads/slips/" . $p_data['slip_image'];
                     if (file_exists($file_path)) { @unlink($file_path); }
                 }
             }
         }
-        $conn->query("DELETE FROM payments WHERE booking_id = $delete_id");
+        @pg_query_params($conn, "DELETE FROM payments WHERE booking_id = $1", array($delete_id));
     }
 
-    $conn->query("DELETE FROM bookings WHERE id = $delete_id");
+    @pg_query_params($conn, "DELETE FROM bookings WHERE id = $1", array($delete_id));
     
     header("Location: manage_bookings.php?msg=deleted");
     exit();
 }
 
-// 🟢 4. รับค่าคำค้นหา (Search)
+// 4. รับค่าคำค้นหา (Search)
 $search_query = "";
 $search_param = "";
+$search_params = [];
 if (isset($_GET['search']) && trim($_GET['search']) !== '') {
     $search_param = trim($_GET['search']);
-    $search_safe = $conn->real_escape_string($search_param);
-    // ค้นหาจาก รหัสจอง, ชื่อลูกค้า, เบอร์โทร
-    $search_query = " WHERE b.booking_code LIKE '%$search_safe%' 
-                      OR c.full_name LIKE '%$search_safe%' 
-                      OR b.guest_name LIKE '%$search_safe%' 
-                      OR c.phone LIKE '%$search_safe%' 
-                      OR b.guest_tel LIKE '%$search_safe%' ";
+    $search_query = " WHERE (b.booking_code ILIKE $1 
+                      OR c.full_name ILIKE $1 
+                      OR b.guest_name ILIKE $1 
+                      OR c.phone ILIKE $1 
+                      OR b.guest_tel ILIKE $1) ";
+    $search_params[] = '%' . $search_param . '%';
 }
 
-// 🟢 5. ระบบแบ่งหน้า (Pagination) หน้าละ 10 รายการ
-$limit = 10; // จำนวนรายการที่ต้องการแสดงต่อหน้า
+// 5. ระบบแบ่งหน้า (Pagination) หน้าละ 10 รายการ
+$limit = 10;
 $page = isset($_GET['page']) && is_numeric($_GET['page']) ? intval($_GET['page']) : 1;
 if ($page < 1) $page = 1;
 $offset = ($page - 1) * $limit;
 
-// นับจำนวนข้อมูลทั้งหมดที่ตรงกับเงื่อนไขการค้นหา เพื่อหาจำนวนหน้าทั้งหมด
-$count_sql = "SELECT COUNT(b.id) as total_rows 
-              FROM bookings b 
-              LEFT JOIN customers c ON b.customer_id = c.id 
-              $search_query";
-$count_res = $conn->query($count_sql);
-$total_rows = ($count_res) ? $count_res->fetch_assoc()['total_rows'] : 0;
+// นับจำนวนข้อมูลทั้งหมด
+$total_rows = 0;
+if ($conn) {
+    $count_sql = "SELECT COUNT(b.id) as total_rows 
+                  FROM bookings b 
+                  LEFT JOIN customers c ON b.customer_id = c.id 
+                  $search_query";
+    $count_res = !empty($search_params) ? @pg_query_params($conn, $count_sql, $search_params) : @pg_query($conn, $count_sql);
+    if ($count_res && $row = pg_fetch_assoc($count_res)) {
+        $total_rows = intval($row['total_rows']);
+    }
+}
 $total_pages = ceil($total_rows / $limit);
 
-// 6. ดึงข้อมูลการจอง พร้อมค้นหา, แบ่งหน้า และเรียงวันที่ (ล่าสุดขึ้นก่อน)
-$sql = "SELECT b.*, 
-               c.full_name AS customer_name, 
-               c.phone AS customer_phone,
-               r.name AS raft_name,
-               r.featured_image,
-               p.slip_image
-        FROM bookings b
-        LEFT JOIN customers c ON b.customer_id = c.id
-        LEFT JOIN rafts r ON b.raft_id = r.id
-        LEFT JOIN payments p ON b.id = p.booking_id
-        $search_query
-        ORDER BY b.check_in_date DESC, b.check_in_time DESC, b.id DESC 
-        LIMIT $limit OFFSET $offset"; 
-$result = $conn->query($sql);
+// 6. ดึงข้อมูลการจองเก็บใส่ Array
+$bookings = [];
+if ($conn) {
+    $sql = "SELECT b.*, 
+                   c.full_name AS customer_name, 
+                   c.phone AS customer_phone,
+                   r.name AS raft_name,
+                   r.featured_image,
+                   p.slip_image
+            FROM bookings b
+            LEFT JOIN customers c ON b.customer_id = c.id
+            LEFT JOIN rafts r ON b.raft_id = r.id
+            LEFT JOIN payments p ON b.id = p.booking_id
+            $search_query
+            ORDER BY b.id DESC 
+            LIMIT $limit OFFSET $offset"; 
+            
+    $result = !empty($search_params) ? @pg_query_params($conn, $sql, $search_params) : @pg_query($conn, $sql);
+    if ($result) {
+        while ($row = pg_fetch_assoc($result)) {
+            $bookings[] = $row;
+        }
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -167,8 +181,6 @@ $result = $conn->query($sql);
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
-    
-    <!-- เพิ่มไลบรารี SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <style>
@@ -210,48 +222,29 @@ $result = $conn->query($sql);
 
         <div class="p-4 lg:p-10 flex-grow">
             
-            <!-- 🟢 ส่วนของช่องค้นหา + ปุ่มเพิ่มข้อมูลการจอง -->
+            <!-- ส่วนของช่องค้นหา + ปุ่มเพิ่มข้อมูลการจอง -->
             <div class="mb-6 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4">
 
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
-
                     <!-- Search Box -->
-                    <form method="GET" action="manage_bookings.php"
-                          class="w-full md:w-96 relative flex items-center">
+                    <form method="GET" action="manage_bookings.php" class="w-full md:w-96 relative flex items-center">
                         <i class="fa fa-search absolute left-4 text-slate-400"></i>
-
-                        <input type="text"
-                               name="search"
-                               value="<?php echo htmlspecialchars($search_param); ?>"
+                        <input type="text" name="search" value="<?php echo htmlspecialchars($search_param); ?>"
                                placeholder="ค้นหารหัสจอง, ชื่อลูกค้า, เบอร์โทร..."
-                               class="w-full pl-10 pr-10 py-3 rounded-2xl border border-slate-200
-                                      bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100
-                                      outline-none text-sm transition shadow-sm font-bold text-slate-700">
+                               class="w-full pl-10 pr-10 py-3 rounded-2xl border border-slate-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition shadow-sm font-bold text-slate-700">
 
                         <?php if (!empty($search_param)): ?>
-                            <!-- ปุ่มล้างการค้นหา -->
-                            <a href="manage_bookings.php"
-                               class="absolute right-3 text-slate-400 hover:text-rose-500 transition"
-                               title="ล้างการค้นหา">
+                            <a href="manage_bookings.php" class="absolute right-3 text-slate-400 hover:text-rose-500 transition" title="ล้างการค้นหา">
                                 <i class="fa fa-times-circle"></i>
                             </a>
                         <?php endif; ?>
-
                         <button type="submit" class="hidden">ค้นหา</button>
                     </form>
 
-                    <!-- 🟦 ปุ่มเพิ่มข้อมูลการจอง -->
-                    <a href="add_booking.php"
-                       class="inline-flex items-center justify-center gap-2
-                              bg-blue-600 hover:bg-blue-700 active:bg-blue-800
-                              text-white px-5 py-3 rounded-2xl
-                              font-bold text-sm shadow-md hover:shadow-lg
-                              transition-all duration-200 whitespace-nowrap
-                              focus:outline-none focus:ring-4 focus:ring-blue-200">
-                        <i class="fa fa-plus text-sm"></i>
-                        เพิ่มข้อมูลการจอง
+                    <!-- ปุ่มเพิ่มข้อมูลการจอง -->
+                    <a href="add_booking.php" class="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-5 py-3 rounded-2xl font-bold text-sm shadow-md hover:shadow-lg transition-all duration-200 whitespace-nowrap">
+                        <i class="fa fa-plus text-sm"></i> เพิ่มข้อมูลการจอง
                     </a>
-
                 </div>
 
                 <div class="text-sm font-bold text-slate-600">
@@ -261,7 +254,6 @@ $result = $conn->query($sql);
                     พบข้อมูลทั้งหมด <?php echo $total_rows; ?> รายการ 
                     <span class="text-xs text-slate-400 font-normal">(หน้า <?php echo $page; ?>/<?php echo max(1, $total_pages); ?>)</span>
                 </div>
-
             </div>
 
             <!-- Table View (Desktop) -->
@@ -280,14 +272,14 @@ $result = $conn->query($sql);
                         </thead>
                         <tbody class="divide-y divide-slate-50">
                             <?php 
-                            if ($result && $result->num_rows > 0): 
-                                while($row = $result->fetch_assoc()): 
+                            if (!empty($bookings)): 
+                                foreach($bookings as $row): 
                                     $booking_id = $row['id'];
                                     $booker = !empty($row['customer_name']) ? $row['customer_name'] : ($row['guest_name'] ?? 'ลูกค้าทั่วไป');
                                     $booker_phone = !empty($row['customer_phone']) ? $row['customer_phone'] : ($row['guest_tel'] ?? '-');
                                     $b_code = !empty($row['booking_code']) ? $row['booking_code'] : ('BK' . str_pad($booking_id, 6, '0', STR_PAD_LEFT));
                                     $raft_title = $row['raft_name'] ?? ('แพ #' . $row['raft_id']);
-                                    $total_amount = floatval($row['raft_price'] ?? $row['total_price'] ?? 0);
+                                    $total_amount = floatval($row['total_amount'] ?? $row['raft_price'] ?? $row['total_price'] ?? 0);
                                     $slip_file = $row['slip_image'] ?? '';
 
                                     $raw_status_id = intval($row['status_id'] ?? 1);
@@ -329,7 +321,7 @@ $result = $conn->query($sql);
                                 <td class="p-6 text-center">
                                     <?php if(!empty($slip_file)): ?>
                                          <button onclick="openSlipModal(this)" 
-                                                 data-slip="../uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
+                                                 data-slip="uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
                                                  data-booking-id="<?php echo $booking_id; ?>"
                                                  data-booking-code="<?php echo htmlspecialchars($b_code); ?>"
                                                  data-guest-name="<?php echo htmlspecialchars($booker); ?>"
@@ -352,7 +344,6 @@ $result = $conn->query($sql);
                                         <?php if($status_key === 'pending'): ?>
                                             <a href="?id=<?php echo $booking_id; ?>&status=confirmed" title="ยืนยันการจอง" class="bg-emerald-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-emerald-600 shadow-md transition flex items-center gap-1"><i class="fa fa-check text-xs"></i> อนุมัติ</a>
                                         <?php elseif($status_key === 'confirmed'): ?>
-                                            <!-- ปุ่มคืนแพ (เรียก JS Function) -->
                                             <button type="button" onclick="checkoutRaft(<?php echo $booking_id; ?>, '<?php echo htmlspecialchars($raft_title); ?>')" title="ลูกค้านำแพมาคืน" class="bg-blue-600 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-blue-700 shadow-md transition flex items-center gap-1.5">
                                                 <i class="fa fa-undo text-xs"></i> คืนแพ / เสร็จสิ้น
                                             </button>
@@ -370,7 +361,7 @@ $result = $conn->query($sql);
                                     </div>
                                 </td>
                             </tr>
-                            <?php endwhile; else: ?>
+                            <?php endforeach; else: ?>
                             <tr>
                                 <td colspan="6" class="p-20 text-center text-slate-400 font-bold uppercase tracking-widest">
                                     <?php echo !empty($search_param) ? 'ไม่พบรายการจองที่ค้นหา' : 'ยังไม่มีรายการจองในระบบ'; ?>
@@ -385,14 +376,13 @@ $result = $conn->query($sql);
             <!-- Card View (Mobile) -->
             <div class="card-container grid grid-cols-1 gap-4 lg:hidden mb-6">
                 <?php 
-                if ($result && $result->num_rows > 0): 
-                    $result->data_seek(0);
-                    while($row = $result->fetch_assoc()): 
+                if (!empty($bookings)): 
+                    foreach($bookings as $row): 
                         $booking_id = $row['id'];
                         $booker = !empty($row['customer_name']) ? $row['customer_name'] : ($row['guest_name'] ?? 'ลูกค้าทั่วไป');
                         $b_code = !empty($row['booking_code']) ? $row['booking_code'] : ('BK' . str_pad($booking_id, 6, '0', STR_PAD_LEFT));
                         $raft_title = $row['raft_name'] ?? ('แพ #' . $row['raft_id']);
-                        $total_amount = floatval($row['raft_price'] ?? $row['total_price'] ?? 0);
+                        $total_amount = floatval($row['total_amount'] ?? $row['raft_price'] ?? $row['total_price'] ?? 0);
                         $slip_file = $row['slip_image'] ?? '';
 
                         $raw_status_id = intval($row['status_id'] ?? 1);
@@ -438,7 +428,7 @@ $result = $conn->query($sql);
                     <div class="flex flex-wrap gap-2">
                         <?php if(!empty($slip_file)): ?>
                             <button onclick="openSlipModal(this)" 
-                                    data-slip="../uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
+                                    data-slip="uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
                                     data-booking-id="<?php echo $booking_id; ?>"
                                     data-booking-code="<?php echo htmlspecialchars($b_code); ?>"
                                     data-guest-name="<?php echo htmlspecialchars($booker); ?>"
@@ -452,7 +442,6 @@ $result = $conn->query($sql);
                         <?php if($status_key === 'pending'): ?>
                             <a href="?id=<?php echo $booking_id; ?>&status=confirmed" class="flex-1 bg-emerald-500 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center hover:bg-emerald-600">อนุมัติ</a>
                         <?php elseif($status_key === 'confirmed'): ?>
-                            <!-- ปุ่มคืนแพ (ในมือถือ) -->
                             <button type="button" onclick="checkoutRaft(<?php echo $booking_id; ?>, '<?php echo htmlspecialchars($raft_title); ?>')" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center hover:bg-blue-700 gap-1">
                                 <i class="fa fa-undo"></i> คืนแพ / เสร็จสิ้น
                             </button>
@@ -467,23 +456,21 @@ $result = $conn->query($sql);
                         <?php endif; ?>
                     </div>
                 </div>
-                <?php endwhile; else: ?>
+                <?php endforeach; else: ?>
                     <div class="p-10 text-center text-slate-400 font-bold">
                         <?php echo !empty($search_param) ? 'ไม่พบรายการจองที่ค้นหา' : 'ยังไม่มีรายการจองในระบบ'; ?>
                     </div>
                 <?php endif; ?>
             </div>
 
-            <!-- 🟢 ระบบแบ่งหน้า Pagination (UI) -->
+            <!-- ระบบแบ่งหน้า Pagination (UI) -->
             <?php if ($total_pages > 1): ?>
             <div class="flex justify-center mt-4 mb-8">
                 <nav class="inline-flex rounded-2xl shadow-sm bg-white overflow-hidden border border-slate-200">
                     <?php 
-                    // สร้าง Link ที่เก็บค่าการค้นหาไว้ด้วย
                     $q_search = !empty($search_param) ? "&search=".urlencode($search_param) : "";
                     ?>
 
-                    <!-- ปุ่ม ย้อนกลับ -->
                     <?php if ($page > 1): ?>
                         <a href="?page=<?php echo $page - 1 . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 border-r border-slate-100 transition">
                             <i class="fa fa-chevron-left"></i>
@@ -494,7 +481,6 @@ $result = $conn->query($sql);
                         </span>
                     <?php endif; ?>
 
-                    <!-- ตัวเลขหน้า -->
                     <?php for ($i = 1; $i <= $total_pages; $i++): 
                         $active_class = ($i == $page) ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50 border-r border-slate-100";
                     ?>
@@ -503,7 +489,6 @@ $result = $conn->query($sql);
                         </a>
                     <?php endfor; ?>
 
-                    <!-- ปุ่ม ถัดไป -->
                     <?php if ($page < $total_pages): ?>
                         <a href="?page=<?php echo $page + 1 . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 transition border-l border-slate-100" style="margin-left:-1px;">
                             <i class="fa fa-chevron-right"></i>
@@ -605,7 +590,6 @@ $result = $conn->query($sql);
             }
         }
 
-        // JavaScript ฟังก์ชันสำหรับการคืนแพแบบ AJAX + SweetAlert2
         function checkoutRaft(bookingId, raftName) {
             Swal.fire({
                 title: 'ยืนยันการคืนแพ?',
@@ -618,7 +602,6 @@ $result = $conn->query($sql);
                 cancelButtonText: 'ยกเลิก'
             }).then((result) => {
                 if (result.isConfirmed) {
-                    
                     fetch(`manage_bookings.php?id=${bookingId}&status=completed&ajax=1`)
                     .then(response => response.json())
                     .then(data => {
