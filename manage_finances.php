@@ -1,54 +1,49 @@
 <?php
 session_start();
-
-if (file_exists(__DIR__ . '/db_config.php')) {
-    require_once __DIR__ . '/db_config.php';
-} elseif (file_exists(__DIR__ . '/../db_config.php')) {
-    require_once __DIR__ . '/../db_config.php';
-} else {
-    die("ไม่พบไฟล์ db_config.php กรุณาตรวจสอบตำแหน่งไฟล์ในระบบ");
-}
+require_once __DIR__ . '/../db_config.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
     exit();
 }
 
-// 1. สร้างตาราง expenses สำหรับ PostgreSQL (ใช้ SERIAL สำหรับ Auto Increment)
-pg_query($conn, "CREATE TABLE IF NOT EXISTS expenses (
-    expense_id SERIAL PRIMARY KEY,
+// สร้างตาราง expenses อัตโนมัติหากยังไม่มี (ปรับชื่อ PK เป็น expense_id ให้ตรงกับ DB)
+$conn->query("CREATE TABLE IF NOT EXISTS expenses (
+    expense_id INT AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     amount DECIMAL(10,2) NOT NULL,
     expense_date DATE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);");
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
 $today = date('Y-m-d');
 $this_month = date('Y-m');
 
-// 2. ระบบเพิ่มค่าใช้จ่าย (PostgreSQL Prepared Statement)
+// 2. ระบบเพิ่มค่าใช้จ่าย (ใช้ Prepared Statement)
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_expense'])) {
     $title = trim($_POST['title']);
     $amount = floatval($_POST['amount']);
     $date = !empty($_POST['expense_date']) ? $_POST['expense_date'] : $today;
     
-    $result = pg_query_params($conn, 
-        "INSERT INTO expenses (title, amount, expense_date) VALUES ($1, $2, $3)", 
-        array($title, $amount, $date)
-    );
+    $stmt = $conn->prepare("INSERT INTO expenses (title, amount, expense_date) VALUES (?, ?, ?)");
+    $stmt->bind_param("sds", $title, $amount, $date);
     
-    if ($result) {
+    if ($stmt->execute()) {
         header("Location: manage_finances.php?msg=success");
     } else {
         header("Location: manage_finances.php?msg=error");
     }
+    $stmt->close();
     exit();
 }
 
-// 3. ระบบลบค่าใช้จ่าย
+// 3. ระบบลบค่าใช้จ่าย (แก้ไข SQL ใช้ expense_id)
 if (isset($_GET['delete_expense'])) {
     $id = intval($_GET['delete_expense']);
-    pg_query_params($conn, "DELETE FROM expenses WHERE expense_id = $1", array($id));
+    $stmt = $conn->prepare("DELETE FROM expenses WHERE expense_id = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $stmt->close();
     
     header("Location: manage_finances.php?msg=deleted");
     exit();
@@ -57,33 +52,33 @@ if (isset($_GET['delete_expense'])) {
 // 4. คำนวณสรุปยอดรายรับ และรายจ่าย
 $income_where = "status_id IN (2, 4)";
 
-// รายได้รวมค่าแพวันนี้
-$res_raft_today = pg_query($conn, "SELECT COALESCE(SUM(raft_price), 0) AS total FROM bookings WHERE $income_where AND check_in_date = '$today'");
-$raft_income_today = ($res_raft_today && $row = pg_fetch_assoc($res_raft_today)) ? floatval($row['total']) : 0;
+// รายได้รวมค่าแพวันนี้ (ยอดค่าแพรวม 100% ของวันนี้)
+$res_raft_today = $conn->query("SELECT COALESCE(SUM(raft_price), 0) AS total FROM bookings WHERE $income_where AND check_in_date = '$today'");
+$raft_income_today = ($res_raft_today && $row = $res_raft_today->fetch_assoc()) ? floatval($row['total']) : 0;
 
-// รายได้ชมรมวันนี้ (ค่าคิว 10%)
-$res_inc_today = pg_query($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND check_in_date = '$today'");
-$income_today = ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) ? floatval($row['total']) : 0;
+// รายได้ชมรมวันนี้ (ค่าคิว 10% จาก raft_price)
+$res_inc_today = $conn->query("SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND check_in_date = '$today'");
+$income_today = ($res_inc_today && $row = $res_inc_today->fetch_assoc()) ? floatval($row['total']) : 0;
 
 // รายได้ชมรมเดือนนี้ (ค่าคิว 10%)
-$res_inc_month = pg_query($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND CAST(check_in_date AS TEXT) LIKE '$this_month%'");
-$income_month = ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) ? floatval($row['total']) : 0;
+$res_inc_month = $conn->query("SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND check_in_date LIKE '$this_month%'");
+$income_month = ($res_inc_month && $row = $res_inc_month->fetch_assoc()) ? floatval($row['total']) : 0;
 
-// รายได้ชมรมสะสมทั้งหมด
-$res_inc_all = pg_query($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where");
-$income_all = ($res_inc_all && $row = pg_fetch_assoc($res_inc_all)) ? floatval($row['total']) : 0;
+// รายได้ชมรมสะสมทั้งหมด (ค่าคิว 10% All-time)
+$res_inc_all = $conn->query("SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where");
+$income_all = ($res_inc_all && $row = $res_inc_all->fetch_assoc()) ? floatval($row['total']) : 0;
 
 // รายจ่ายวันนี้
-$res_exp_today = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
-$expense_today = ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) ? floatval($row['total']) : 0;
+$res_exp_today = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
+$expense_today = ($res_exp_today && $row = $res_exp_today->fetch_assoc()) ? floatval($row['total']) : 0;
 
 // รายจ่ายเดือนนี้
-$res_exp_month = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE CAST(expense_date AS TEXT) LIKE '$this_month%'");
-$expense_month = ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) ? floatval($row['total']) : 0;
+$res_exp_month = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date LIKE '$this_month%'");
+$expense_month = ($res_exp_month && $row = $res_exp_month->fetch_assoc()) ? floatval($row['total']) : 0;
 
-// 5. ดึงรายการรายรับจากตาราง bookings
+// 5. ดึงรายการรายรับจากตาราง bookings (บันทึกรายได้ชมรมจากค่าคิว 10%)
 $booking_items = [];
-$res_b = pg_query($conn, "
+$res_b = $conn->query("
     SELECT b.id, b.booking_code, b.raft_price, b.check_in_date, b.status_id, r.name as raft_name 
     FROM bookings b 
     LEFT JOIN rafts r ON b.raft_id = r.id 
@@ -92,9 +87,9 @@ $res_b = pg_query($conn, "
 ");
 
 if ($res_b) {
-    while ($r = pg_fetch_assoc($res_b)) {
+    while ($r = $res_b->fetch_assoc()) {
         $raft_price = floatval($r['raft_price']);
-        $queue_fee = $raft_price * 0.10;
+        $queue_fee = $raft_price * 0.10; // คิดค่าคิว 10%
         
         $booking_items[] = [
             'type'       => 'income',
@@ -109,17 +104,17 @@ if ($res_b) {
     }
 }
 
-// 6. ดึงรายการรายจ่ายจากตาราง expenses
+// 6. ดึงรายการรายจ่ายจากตาราง expenses (แก้ไขเรียงลำดับและใช้ expense_id)
 $expense_items = [];
-$res_e = pg_query($conn, "SELECT * FROM expenses ORDER BY expense_id DESC");
+$res_e = $conn->query("SELECT * FROM expenses ORDER BY expense_id DESC");
 if ($res_e) {
-    while ($r = pg_fetch_assoc($res_e)) {
+    while ($r = $res_e->fetch_assoc()) {
         $expense_items[] = [
             'type'   => 'expense',
             'amount' => floatval($r['amount']),
             'date'   => $r['expense_date'],
             'note'   => $r['title'],
-            'ref_id' => $r['expense_id'],
+            'ref_id' => $r['expense_id'], // ปรับเป็น expense_id เพื่อใช้ส่งค่าในการลบ
             'code'   => '-',
             'status' => 'จ่ายแล้ว'
         ];
@@ -273,11 +268,14 @@ if (!empty($start_date) && !empty($end_date)) {
                 <!-- ตารางสรุปรายการล่าสุด -->
                 <div class="lg:col-span-2">
                     <div class="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden">
+                        
+                        <!-- Header พร้อมฟอร์มเลือกช่วงวันที่ -->
                         <div class="p-6 md:p-8 border-b border-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                             <h3 class="text-xl font-black text-slate-800 flex items-center gap-3">
                                 <i class="fa fa-history text-blue-500 text-2xl"></i> <?php echo $filter_title; ?>
                             </h3>
                             
+                            <!-- ช่องเลือกช่วงวันที่ -->
                             <form method="GET" action="manage_finances.php" class="flex flex-wrap items-center gap-2 w-full md:w-auto">
                                 <div class="flex items-center gap-1 bg-gray-50 p-1.5 rounded-2xl border border-gray-200">
                                     <input type="date" name="start_date" value="<?php echo htmlspecialchars($start_date); ?>" 
@@ -395,6 +393,16 @@ if (!empty($start_date) && !empty($end_date)) {
 
             expenseTitleEl.addEventListener('input', checkAndFillPrice);
             expenseTitleEl.addEventListener('change', checkAndFillPrice);
+        }
+
+        function setExpenseTitle(value) {
+            if (expenseTitleEl) {
+                expenseTitleEl.value = value;
+                if (expensePriceMap[value] !== undefined && expenseAmountEl) {
+                    expenseAmountEl.value = expensePriceMap[value].toFixed(2);
+                }
+                expenseTitleEl.focus();
+            }
         }
 
         function toggleSidebar() {
