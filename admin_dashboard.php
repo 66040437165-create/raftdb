@@ -39,7 +39,7 @@ if ($is_admin) {
     $today = date('Y-m-d');
     $this_month = date('Y-m');
 
-    // คำนวณรายได้ (PostgreSQL Syntax)
+    // คำนวณรายได้
     $res_inc_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
     if ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) {
         $income_today = floatval($row['total']);
@@ -50,7 +50,7 @@ if ($is_admin) {
         $income_month = floatval($row['total']);
     }
 
-    // คำนวณรายจ่าย (PostgreSQL Syntax)
+    // คำนวณรายจ่าย
     $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
     if ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) {
         $expense_today = floatval($row['total']);
@@ -62,7 +62,7 @@ if ($is_admin) {
     }
 }
 
-// 4. ดึงรายการจอง 5 รายการล่าสุด (PostgreSQL Syntax)
+// 4. ดึงรายการจอง 5 รายการล่าสุด
 $recent_bookings = @pg_query($conn, "
     SELECT b.*, r.raft_name, 
            COALESCE(c.customer_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
