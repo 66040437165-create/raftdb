@@ -4,7 +4,7 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 session_start();
-require_once __DIR__ . '/db_config.php';
+require_once __DIR__ . '/db_config.php'; // แก้ไขเป็นแบบนี้ครับ
 
 // 1. ตรวจสอบสิทธิ์: ต้องล็อกอินและเป็น Admin (role_id = 1) เท่านั้น
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
