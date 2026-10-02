@@ -18,78 +18,126 @@ if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
     exit();
 }
 
-// 3. ระบบลบข้อมูลแพ (เรียงลำดับ Foreign Key ให้ถูกต้อง)
+// 3. ระบบลบข้อมูลแพ (ตรวจสอบคอลัมน์อัตโนมัติก่อนเริ่ม Transaction ป้องกัน Transaction Aborted)
 if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
     if ($conn && $delete_id > 0) {
+
+        // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง rafts
+        $r_cols = [];
+        $res_rc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'rafts'");
+        if ($res_rc) {
+            while ($c = pg_fetch_assoc($res_rc)) {
+                $r_cols[] = strtolower($c['column_name']);
+            }
+        }
+
+        // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings
+        $b_cols = [];
+        $res_bc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
+        if ($res_bc) {
+            while ($c = pg_fetch_assoc($res_bc)) {
+                $b_cols[] = strtolower($c['column_name']);
+            }
+        }
+
+        // ตรวจสอบตาราง payments
+        $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
+        $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
+        $pay_cols = [];
+        if ($has_pay) {
+            $res_pc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'payments'");
+            if ($res_pc) {
+                while ($c = pg_fetch_assoc($res_pc)) {
+                    $pay_cols[] = strtolower($c['column_name']);
+                }
+            }
+        }
+
+        // ตรวจสอบตาราง raft_images
+        $chk_r_imgs = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
+        $has_r_imgs = ($chk_r_imgs && ($r_tbl = pg_fetch_row($chk_r_imgs)) && !empty($r_tbl[0]));
+
+        // เริ่มต้น Transaction
         @pg_query($conn, "BEGIN");
-        try {
-            // 3.1 ลบข้อมูลในตาราง payments ที่ผูกกับ bookings ของแพนี้ก่อน (ป้องกัน Foreign Key Error)
-            $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
-            $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
-            if ($has_pay) {
-                // ลบรูปสลิปจริงจาก payments
+
+        // 3.1 ลบข้อมูลในตาราง payments ที่ผูกกับการจองของแพนี้
+        if ($has_pay && in_array('booking_id', $pay_cols)) {
+            if (in_array('slip_image', $pay_cols)) {
                 $res_pay_slips = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
                 if ($res_pay_slips) {
                     while ($ps = pg_fetch_assoc($res_pay_slips)) {
                         if (!empty($ps['slip_image'])) { @unlink("uploads/slips/" . $ps['slip_image']); }
                     }
                 }
-                @pg_query_params($conn, "DELETE FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
             }
+            $del_p = @pg_query_params($conn, "DELETE FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
+            if ($del_p === false) {
+                $err = pg_last_error($conn);
+                @pg_query($conn, "ROLLBACK");
+                header("Location: manage_rafts.php?msg=error&err=" . urlencode($err));
+                exit();
+            }
+        }
 
-            // 3.2 ลบรูปสลิปจากตาราง bookings (ถ้ามี)
+        // 3.2 ลบรูปสลิปจากตาราง bookings (เฉพาะเมื่อมีคอลัมน์ slip_image)
+        if (in_array('slip_image', $b_cols)) {
             $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
             if ($res_slips) {
                 while ($slip = pg_fetch_assoc($res_slips)) {
                     if (!empty($slip['slip_image'])) { @unlink("uploads/slips/" . $slip['slip_image']); }
                 }
             }
+        }
 
-            // 3.3 ลบรูปภาพจากตาราง rafts (featured_image และ image_1 ถึง image_5)
-            $res_raft_imgs = @pg_query_params($conn, "SELECT featured_image, image_1, image_2, image_3, image_4, image_5 FROM rafts WHERE id = $1", array($delete_id));
+        // 3.3 ลบรูปภาพจากตาราง rafts (ดึงเฉพาะคอลัมน์ที่มีอยู่จริง)
+        $img_cols_to_select = [];
+        if (in_array('featured_image', $r_cols)) $img_cols_to_select[] = 'featured_image';
+        for ($i = 1; $i <= 5; $i++) {
+            if (in_array("image_$i", $r_cols)) $img_cols_to_select[] = "image_$i";
+        }
+        if (!empty($img_cols_to_select)) {
+            $res_raft_imgs = @pg_query_params($conn, "SELECT " . implode(", ", $img_cols_to_select) . " FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
-                if (!empty($r_img['featured_image'])) { @unlink("uploads/" . $r_img['featured_image']); }
-                for ($i = 1; $i <= 5; $i++) {
-                    $col_name = "image_" . $i;
-                    if (!empty($r_img[$col_name])) { @unlink("uploads/" . $r_img[$col_name]); }
+                foreach ($img_cols_to_select as $col) {
+                    if (!empty($r_img[$col])) { @unlink("uploads/" . $r_img[$col]); }
                 }
             }
+        }
 
-            // 3.4 ลบรูปจากตารางย่อย raft_images (ถ้ามี)
-            $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
-            $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
-            if ($has_tbl) {
-                $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
-                if ($res_imgs) {
-                    while ($img = pg_fetch_assoc($res_imgs)) {
-                        if (!empty($img['image_path'])) { @unlink("uploads/" . $img['image_path']); }
-                    }
-                    @pg_query_params($conn, "DELETE FROM raft_images WHERE raft_id = $1", array($delete_id));
+        // 3.4 ลบรูปจากตารางย่อย raft_images (ถ้ามี)
+        if ($has_r_imgs) {
+            $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
+            if ($res_imgs) {
+                while ($img = pg_fetch_assoc($res_imgs)) {
+                    if (!empty($img['image_path'])) { @unlink("uploads/" . $img['image_path']); }
                 }
             }
+            @pg_query_params($conn, "DELETE FROM raft_images WHERE raft_id = $1", array($delete_id));
+        }
 
-            // 3.5 ลบรายการจองของแพนี้ในตาราง bookings
-            @pg_query_params($conn, "DELETE FROM bookings WHERE raft_id = $1", array($delete_id));
-
-            // 3.6 ลบแพออกจากตาราง rafts
-            $del_raft = @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
-
-            if ($del_raft) {
-                @pg_query($conn, "COMMIT");
-                header("Location: manage_rafts.php?msg=deleted");
-                exit();
-            } else {
-                $err_db = pg_last_error($conn);
-                @pg_query($conn, "ROLLBACK");
-                header("Location: manage_rafts.php?msg=error&err=" . urlencode($err_db));
-                exit();
-            }
-        } catch (Exception $exception) {
+        // 3.5 ลบรายการจองในตาราง bookings
+        $del_b = @pg_query_params($conn, "DELETE FROM bookings WHERE raft_id = $1", array($delete_id));
+        if ($del_b === false) {
+            $err = pg_last_error($conn);
             @pg_query($conn, "ROLLBACK");
-            header("Location: manage_rafts.php?msg=error&err=" . urlencode($exception->getMessage()));
+            header("Location: manage_rafts.php?msg=error&err=" . urlencode($err));
             exit();
         }
+
+        // 3.6 ลบแพออกจากตาราง rafts
+        $del_raft = @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
+        if ($del_raft === false) {
+            $err = pg_last_error($conn);
+            @pg_query($conn, "ROLLBACK");
+            header("Location: manage_rafts.php?msg=error&err=" . urlencode($err));
+            exit();
+        }
+
+        // ทำการยืนยัน Transaction
+        @pg_query($conn, "COMMIT");
+        header("Location: manage_rafts.php?msg=deleted");
+        exit();
     }
 }
 
@@ -200,7 +248,7 @@ if ($conn) {
                 <div id="toast" class="bg-rose-500 text-white px-4 lg:px-6 py-2 rounded-full shadow-lg text-xs lg:text-sm font-bold flex items-center gap-2">
                     <i class="fa fa-exclamation-circle"></i> ไม่สามารถลบแพได้: <?php echo htmlspecialchars($_GET['err'] ?? 'ติดข้อมูลผูกพัน'); ?>
                 </div>
-                <script>setTimeout(() => { const t = document.getElementById('toast'); if(t) t.remove(); }, 5000);</script>
+                <script>setTimeout(() => { const t = document.getElementById('toast'); if(t) t.remove(); }, 6000);</script>
             <?php endif; ?>
         </header>
 
