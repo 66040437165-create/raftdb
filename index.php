@@ -11,38 +11,88 @@ if ($conn) {
         }
     }
 }
-$open_time =$settings['open_time'] ?? '09:00';
+$open_time  =$settings['open_time'] ?? '09:00';
 $close_time =$settings['close_time'] ?? '17:30';
 
 // 2. รับค่าค้นหาจากฟอร์ม
-$checkin = isset($_GET['checkin']) && !empty($_GET['checkin']) ?$_GET['checkin'] : date('Y-m-d');
-$checkin_time = isset($_GET['checkin_time']) ? $_GET['checkin_time'] :$open_time;
-$checkout = date('Y-m-d', strtotime($checkin . ' +1 day'));$checkout_time = '11:00';
+$checkin          = isset($_GET['checkin']) && !empty($_GET['checkin']) ?$_GET['checkin'] : date('Y-m-d');
+$checkin_time     = isset($_GET['checkin_time']) ? $_GET['checkin_time'] :$open_time;
+$checkout         = date('Y-m-d', strtotime($checkin . ' +1 day'));
+$checkout_time    = '11:00';$guests           = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
+$search_keyword   = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-$guests = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
-$search_keyword = isset($_GET['search']) ? trim($_GET['search']) : '';
-
-// 3. ดึงข้อมูลแพว่างจากตาราง rafts (PostgreSQL)
+// 3. ดึงข้อมูลแพว่างจากตาราง rafts (PostgreSQL แบบตรวจจับโครงสร้างตารางอัตโนมัติ)
 $rafts = [];
-if ($conn) {$sql = "SELECT r.* FROM rafts r 
-            WHERE (TRIM(LOWER(r.status)) = 'available' OR r.status = 'ว่าง')";
-    $params = [];$p_idx = 1;
-
-    if (!empty($search_keyword)) {$sql .= " AND (r.name ILIKE $" . $p_idx . " OR r.raft_code ILIKE $" . $p_idx . " OR r.description ILIKE $" . $p_idx . ")";
-        $params[] = '%' . $search_keyword . '\%';$p_idx++;
+if ($conn) {
+    // 3.1 ตรวจสอบคอลัมน์ของตาราง rafts
+    $r_cols = [];
+    $chk_r = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'rafts'");
+    if ($chk_r) {
+        while ($rc = pg_fetch_assoc($chk_r)) {
+            $r_cols[] = strtolower($rc['column_name']);
+        }
     }
 
-    // ตรวจสอบกับ check_in_date ในตาราง bookings ไม่ให้แสดงแพที่ถูกจองแล้ว
-    $sql .= " AND NOT EXISTS (
+    // 3.2 ตรวจสอบคอลัมน์ของตาราง bookings
+    $b_cols = [];
+    $chk_b = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
+    if ($chk_b) {
+        while ($bc = pg_fetch_assoc($chk_b)) {
+            $b_cols[] = strtolower($bc['column_name']);
+        }
+    }
+
+    $params = [];$p_idx = 1;
+
+    // เงื่อนไขสถานะของแพ (รองรับทั้ง available, ว่าง, 1, หรือค่าว่าง)
+    $where_clauses = [
+        "(r.status IS NULL OR TRIM(LOWER(r.status)) IN ('available', 'ว่าง', 'ready', 'active', '1', ''))"
+    ];
+
+    if (in_array('is_active', $r_cols)) {$where_clauses[] = "(r.is_active = 1 OR r.is_active IS NULL)";
+    }
+
+    // กรองตามคำค้นหา
+    if (!empty($search_keyword)) {$search_fields = [];
+        if (in_array('name', $r_cols))$search_fields[] = "r.name ILIKE $" . $p_idx;
+        if (in_array('raft_code', $r_cols))$search_fields[] = "r.raft_code ILIKE $" . $p_idx;
+        if (in_array('description', $r_cols))$search_fields[] = "r.description ILIKE $" . $p_idx;
+        
+        if (!empty($search_fields)) {
+            $where_clauses[] = "(" . implode(" OR ", $search_fields) . ")";
+            $params[] = '%' . $search_keyword . '\%';$p_idx++;
+        }
+    }
+
+    // ตรวจสอบกับรายการจอง (NOT EXISTS) แบบปลอดภัยตามคอลัมน์ที่มีอยู่จริง
+    if (!empty($b_cols) && in_array('raft_id', $b_cols)) {$date_col = in_array('check_in_date', $b_cols) ? 'b.check_in_date' : (in_array('check_in',$b_cols) ? 'b.check_in' : null);
+
+        if ($date_col) {$st_filters = [];
+            if (in_array('status_id', $b_cols)) {$st_filters[] = "COALESCE(b.status_id, 0) NOT IN (3, 4)";
+            }
+            if (in_array('status', $b_cols)) {$st_filters[] = "LOWER(COALESCE(b.status, '')) NOT IN ('cancelled', 'rejected', 'cancel')";
+            }
+            $st_sql = !empty($st_filters) ? " AND (" . implode(" AND ", $st_filters) . ")" : "";
+
+            $where_clauses[] = "NOT EXISTS (
                 SELECT 1 FROM bookings b 
                 WHERE b.raft_id = r.id 
-                  AND b.check_in_date::text = $" . $p_idx . "
-                  AND (COALESCE(b.status_id, 0) NOT IN (3, 4) AND COALESCE(b.status, '') NOT IN ('cancelled', 'rejected'))
-            )
-            ORDER BY r.id DESC";
-    $params[] =$checkin;
+                  AND $date_col::date = $" . $p_idx . "::date
+                  $st_sql
+            )";
+            $params[] =$checkin;
+            $p_idx++;
+        }
+    }
 
-    $result = @pg_query_params($conn, $sql,$params);
+    $sql = "SELECT r.* FROM rafts r WHERE " . implode(" AND ", $where_clauses) . " ORDER BY r.id DESC";
+    $result = !empty($params) ? @pg_query_params($conn, $sql,$params) : @pg_query($conn,$sql);
+
+    // ระบบสำรอง (Fallback): หาก Query หลักติดปัญหา ให้ดึงแพที่มีสถานะว่างขึ้นมาทันที
+    if (!$result || pg_num_rows($result) === 0) {$fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) IN ('available', 'ว่าง', 'ready', 'active', '1', '')) ORDER BY id DESC";
+        $result = @pg_query($conn,$fallback_sql);
+    }
+
     if ($result) {
         while ($row = pg_fetch_assoc($result)) {
             $rafts[] =$row;
