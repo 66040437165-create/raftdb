@@ -90,10 +90,13 @@ function navClass($page_name, $current_page) {
             </a>
         <?php endif; ?>
 
-        <!-- ปุ่มสำหรับคลิกไปแชทตอบลูกค้าผ่าน LINE -->
-        <a href="https://lin.ee/YOUR_LINE_ID" target="_blank" class="flex items-center p-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-3 border border-emerald-500/20">
-            <i class="fab fa-line w-6 text-center text-lg"></i> <span class="ml-2">ตอบลูกค้า (LINE)</span>
-        </a>
+        <!-- ปุ่มตอบลูกค้า LINE (ใช้ SVG โดยตรง) -->
+<a href="https://lin.ee/YOUR_LINE_ID" target="_blank" class="flex items-center gap-3 px-4 py-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-2 border border-emerald-500/20">
+    <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 5.82 2 10.5c0 2.93 1.81 5.5 4.58 7.02-.2.74-.73 2.68-.78 2.89-.07.31.14.3.3.19.12-.08 1.95-1.33 2.74-1.87.71.18 1.44.27 2.16.27 5.52 0 10-3.82 10-8.5S17.52 2 12 2z"/>
+    </svg>
+    <span>ตอบลูกค้า (LINE)</span>
+</a>
     </nav>
 
     <div class="p-4 border-t border-slate-800">
