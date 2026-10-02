@@ -1,6 +1,10 @@
 <?php
 require_once 'db_config.php';
 
+// ดึงชื่อฐานข้อมูลปัจจุบันอัตโนมัติ ป้องกัน Error ตัวแปรไม่ถูกประกาศ
+$db_info =$conn->query("SELECT DATABASE()");
+$dbname = ($db_info &&$row_db = $db_info->fetch_row()) ?$row_db[0] : 'unknown';
+
 // ตารางที่ระบบต้องการ
 $required_tables = [
     'users'    => ['id', 'username', 'password', 'email', 'role', 'line_id'],
@@ -11,35 +15,36 @@ $required_tables = [
 
 $results = [];
 
-foreach ($required_tables as $table => $expected_cols) {
-    $row = ['table' => $table, 'exists' => false, 'columns' => [], 'missing_cols' => [], 'row_count' => 0];
+foreach ($required_tables as $table =>$expected_cols) {
+    $row = ['table' =>$table, 'exists' => false, 'columns' => [], 'missing_cols' => [], 'row_count' => 0];
 
     // ตรวจว่าตารางมีอยู่ไหม
-    $res = $conn->query("SHOW TABLES LIKE '$table'");
-    if ($res && $res->num_rows > 0) {
-        $row['exists'] = true;
+    $res =$conn->query("SHOW TABLES LIKE '$table'");
+    if ($res && $res->num_rows > 0) {$row['exists'] = true;
 
         // ดึงคอลัมน์จริงจาก DB
-        $cols_res = $conn->query("SHOW COLUMNS FROM `$table`");
+        $cols_res =$conn->query("SHOW COLUMNS FROM `$table`");
         $actual_cols = [];
-        while ($c = $cols_res->fetch_assoc()) {
-            $actual_cols[] = $c['Field'];
+        while ($c =$cols_res->fetch_assoc()) {
+            $actual_cols[] =$c['Field'];
         }
-        $row['columns'] = $actual_cols;
-        $row['missing_cols'] = array_diff($expected_cols, $actual_cols);
+        $row['columns'] =$actual_cols;
+        $row['missing_cols'] = array_diff($expected_cols,$actual_cols);
 
         // นับจำนวนแถว
-        $cnt = $conn->query("SELECT COUNT(*) as c FROM `$table`");
+        $cnt =$conn->query("SELECT COUNT(*) as c FROM `$table`");
         $row['row_count'] = $cnt ? (int)$cnt->fetch_assoc()['c'] : 0;
     }
-    $results[] = $row;
+    $results[] =$row;
 }
 
 // ดึงรายชื่อตารางทั้งหมดใน DB จริง
 $all_tables = [];
-$res_all = $conn->query("SHOW TABLES");
-while ($t = $res_all->fetch_array()) {
-    $all_tables[] = $t[0];
+$res_all =$conn->query("SHOW TABLES");
+if ($res_all) {
+    while ($t =$res_all->fetch_array()) {
+        $all_tables[] =$t[0];
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -76,9 +81,9 @@ while ($t = $res_all->fetch_array()) {
 
 <?php
 $total_ok = 0; $total_warn = 0; $total_err = 0;
-foreach ($results as $r) {
-    if (!$r['exists']) $total_err++;
-    elseif (!empty($r['missing_cols'])) $total_warn++;
+foreach ($results as$r) {
+    if (!$r['exists'])$total_err++;
+    elseif (!empty($r['missing_cols']))$total_warn++;
     else $total_ok++;
 }
 ?>
@@ -89,8 +94,7 @@ foreach ($results as $r) {
   <div class="info-item"><div class="info-val" style="color:#a78bfa"><?= count($all_tables) ?></div><div class="info-label">ตารางทั้งหมดใน DB</div></div>
 </div>
 
-<?php foreach ($results as $r): 
-    $cls = !$r['exists'] ? 'err' : (!empty($r['missing_cols']) ? 'warn' : 'ok');
+<?php foreach ($results as $r):$cls = !$r['exists'] ? 'err' : (!empty($r['missing_cols']) ? 'warn' : 'ok');
 ?>
 <div class="card <?= $cls ?>">
   <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -110,10 +114,10 @@ foreach ($results as $r) {
   <?php if ($r['exists']): ?>
   <div class="cols">
     <strong style="color:#cbd5e1">คอลัมน์:</strong><br>
-    <?php foreach ($r['columns'] as $col): ?>
+    <?php foreach ($r['columns'] as$col): ?>
       <span class="col-chip <?= in_array($col, $r['missing_cols'] ?? []) ? 'missing-chip' : '' ?>"><?= $col ?></span>
     <?php endforeach; ?>
-    <?php foreach ($r['missing_cols'] as $mc): ?>
+    <?php foreach ($r['missing_cols'] as$mc): ?>
       <span class="col-chip missing-chip">⚠ <?= $mc ?> (ขาด)</span>
     <?php endforeach; ?>
   </div>
@@ -122,9 +126,9 @@ foreach ($results as $r) {
 <?php endforeach; ?>
 
 <div class="all-tables">
-  <strong style="color:#f1f5f9">📦 ตารางทั้งหมดที่มีใน Database `<?= $dbname ?>`:</strong><br><br>
-  <?php foreach ($all_tables as $t): ?>
-    <span class="col-chip"><?= $t ?></span>
+  <strong style="color:#f1f5f9">📦 ตารางทั้งหมดที่มีใน Database `<?= htmlspecialchars($dbname) ?>`:</strong><br><br>
+  <?php foreach ($all_tables as$t): ?>
+    <span class="col-chip"><?= htmlspecialchars($t) ?></span>
   <?php endforeach; ?>
 </div>
 
