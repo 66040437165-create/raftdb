@@ -1,323 +1,107 @@
 <?php
-session_start();
-require_once __DIR__ . '/db_config.php';
-
-// 1. ตรวจสอบว่าล็อกอินแล้วหรือยัง (ทั้ง Admin และ Staff เข้าใช้งาน Dashboard ได้)
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit();
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+if (!isset($conn)) {
+    require_once __DIR__ . '/db_config.php';
 }
 
-$is_admin = isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1;
+$current_page = basename($_SERVER['PHP_SELF']);
 
-// 2. ดึงข้อมูลสถิติพื้นฐานสำหรับการดำเนินงาน (PostgreSQL Syntax)
-$total_rafts = 0;
-$total_users = 0;
-$pending_bookings = 0;
+// คำนวณจำนวนรายการที่ "รอตรวจสอบ" สำหรับ PostgreSQL เพื่อแสดง Badge แจ้งเตือน
+$pending_count = 0;
 
 if ($conn) {
-    // นับจำนวนแพทั้งหมด
-    $res_rafts = @pg_query($conn, "SELECT COUNT(*) as total FROM rafts");
-    if ($res_rafts && $row = pg_fetch_assoc($res_rafts)) {
-        $total_rafts = intval($row['total']);
-    }
-
-    // นับจำนวนสมาชิก/ลูกค้า
-    $res_users = @pg_query($conn, "SELECT COUNT(*) as total FROM customers");
-    if ($res_users && $row = pg_fetch_assoc($res_users)) {
-        $total_users = intval($row['total']);
-    }
-
-    // นับรายการรอตรวจสอบ (รองรับทั้ง status_id = 1 และ status = 'pending')
-    $res_pending = @pg_query($conn, "SELECT COUNT(*) as total FROM bookings WHERE status_id = 1 OR status = 'pending'");
-    if ($res_pending && $row = pg_fetch_assoc($res_pending)) {
-        $pending_bookings = intval($row['total']);
-    }
-}
-
-// 3. คำนวณรายได้และรายจ่าย (ดึงเฉพาะเมื่อเป็น Admin เท่านั้น)
-$income_today  = 0;
-$income_month  = 0;
-$expense_today = 0;
-$expense_month = 0;
-
-if ($is_admin && $conn) {
-    $today = date('Y-m-d');
-    $this_month = date('Y-m');
-
-    // คำนวณรายได้วันนี้
-    $res_inc_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND paid_at::date = '$today'::date");
-    if ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) {
-        $income_today = floatval($row['total']);
-    }
-
-    // คำนวณรายได้เดือนนี้ (ใช้ TO_CHAR สำหรับ PostgreSQL)
-    $res_inc_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
-    if ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) {
-        $income_month = floatval($row['total']);
-    }
-
-    // คำนวณรายจ่ายวันนี้
-    $res_exp_today = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date::date = '$today'::date");
-    if ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) {
-        $expense_today = floatval($row['total']);
-    }
-
-    // คำนวณรายจ่ายเดือนนี้
-    $res_exp_month = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
-    if ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) {
-        $expense_month = floatval($row['total']);
-    }
-}
-
-// 4. ดึงรายการจอง 5 รายการล่าสุด
-$recent_bookings = [];
-if ($conn) {
-    $sql_recent = "
-        SELECT b.*, 
-               COALESCE(r.name, '') as raft_name, 
-               COALESCE(b.guest_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name, 
-               p.amount as paid_amount, p.status as payment_status
-        FROM bookings b
-        LEFT JOIN rafts r ON b.raft_id = r.id
-        LEFT JOIN customers c ON b.customer_id = c.id
-        LEFT JOIN payments p ON b.id = p.booking_id
-        ORDER BY b.id DESC LIMIT 5
-    ";
-    $res_recent = @pg_query($conn, $sql_recent);
-    if ($res_recent) {
-        while ($row = pg_fetch_assoc($res_recent)) {
-            $recent_bookings[] = $row;
+    // ดึงรายชื่อคอลัมน์จากตาราง bookings (PostgreSQL Syntax)
+    $res_cols = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
+    $b_cols_sb = [];
+    if ($res_cols) {
+        while ($c = pg_fetch_assoc($res_cols)) {
+            $b_cols_sb[] = strtolower($c['column_name']);
         }
     }
+
+    $has_sid_sb = in_array('status_id', $b_cols_sb);
+    $has_txt_sb = in_array('status', $b_cols_sb);
+
+    $cond_sb = [];
+    if ($has_sid_sb) $cond_sb[] = "status_id = 1";
+    if ($has_txt_sb) $cond_sb[] = "status = 'pending'";
+
+    $where_sb = !empty($cond_sb) ? implode(" OR ", $cond_sb) : "1=0";
+
+    $res_badge = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE $where_sb");
+    if ($res_badge && $r = pg_fetch_assoc($res_badge)) {
+        $pending_count = intval($r['cnt']);
+    }
+}
+
+function navClass($page_name, $current_page) {
+    return ($current_page === $page_name) 
+        ? "bg-blue-600 text-white font-bold shadow-lg" 
+        : "hover:bg-slate-800 text-slate-300 hover:text-white transition";
 }
 ?>
-<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบหลังบ้าน - ChillRaft</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Sarabun', sans-serif; }
-        .sidebar-active { transform: translateX(0) !important; }
-    </style>
-</head>
-<body class="bg-slate-50 flex min-h-screen">
-
-    <!-- Mobile Sidebar Overlay -->
-    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
-
-    <!-- แถบ Sidebar เมนูข้าง -->
-    <?php include 'sidebar.php'; ?>
-
-    <main class="flex-grow flex flex-col min-w-0">
-        
-        <header class="bg-white shadow-sm p-4 flex justify-between items-center px-4 md:px-8 sticky top-0 z-30">
-            <div class="flex items-center">
-                <button onclick="toggleSidebar()" class="md:hidden mr-4 p-2 text-gray-600 hover:bg-gray-100 rounded-lg">
-                    <i class="fa fa-bars text-xl"></i>
-                </button>
-                <div>
-                    <h2 class="text-lg md:text-xl font-bold text-gray-800">ภาพรวมระบบ</h2>
-                    <p class="text-xs text-gray-400">ยินดีต้อนรับสู่ระบบบริหารจัดการแพ</p>
-                </div>
-            </div>
-            <div class="flex items-center space-x-3">
-                <div class="text-right hidden sm:block">
-                    <p class="text-xs md:text-sm font-bold text-gray-700"><?php echo htmlspecialchars($_SESSION['fullname'] ?? $_SESSION['username']); ?></p>
-                    <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full <?php echo $is_admin ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'; ?>">
-                        <?php echo $is_admin ? 'ผู้ดูแลระบบ (Admin)' : 'พนักงาน (Staff)'; ?>
-                    </span>
-                </div>
-                <div class="w-9 h-9 md:w-10 md:h-10 <?php echo $is_admin ? 'bg-amber-500' : 'bg-blue-500'; ?> rounded-full flex items-center justify-center text-white font-bold text-base shadow-sm">
-                    <?php echo mb_substr($_SESSION['fullname'] ?? 'U', 0, 1); ?>
-                </div>
-            </div>
-        </header>
-
-        <div class="p-4 md:p-8 space-y-8">
-            
-            <!-- การ์ดตัวเลขสถิติภาพรวม -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                <a href="manage_rafts.php" class="bg-white p-5 md:p-6 rounded-3xl shadow-sm border-b-4 border-blue-500 hover:shadow-md transition block">
-                    <div class="flex items-center">
-                        <div class="p-3 bg-blue-100 rounded-2xl text-blue-600 mr-4">
-                            <i class="fa fa-ship text-xl md:text-2xl"></i>
-                        </div>
-                        <div>
-                            <p class="text-[10px] md:text-xs text-gray-400 font-bold uppercase tracking-wider">แพทั้งหมด</p>
-                            <h3 class="text-xl md:text-2xl font-black text-slate-800"><?php echo $total_rafts; ?> หลัง</h3>
-                        </div>
-                    </div>
-                </a>
-
-                <a href="manage_bookings.php" class="bg-white p-5 md:p-6 rounded-3xl shadow-sm border-b-4 border-amber-500 hover:shadow-md transition block">
-                    <div class="flex items-center">
-                        <div class="p-3 bg-amber-100 rounded-2xl text-amber-600 mr-4">
-                            <i class="fa fa-clock text-xl md:text-2xl"></i>
-                        </div>
-                        <div>
-                            <p class="text-[10px] md:text-xs text-gray-400 font-bold uppercase tracking-wider">รอตรวจสอบการจอง</p>
-                            <h3 class="text-xl md:text-2xl font-black text-slate-800"><?php echo $pending_bookings; ?> รายการ</h3>
-                        </div>
-                    </div>
-                </a>
-
-                <a href="manage_customers.php" class="bg-white p-5 md:p-6 rounded-3xl shadow-sm border-b-4 border-emerald-500 hover:shadow-md transition block">
-                    <div class="flex items-center">
-                        <div class="p-3 bg-emerald-100 rounded-2xl text-emerald-600 mr-4">
-                            <i class="fa fa-user-friends text-xl md:text-2xl"></i>
-                        </div>
-                        <div>
-                            <p class="text-[10px] md:text-xs text-gray-400 font-bold uppercase tracking-wider">สมาชิก / ลูกค้า</p>
-                            <h3 class="text-xl md:text-2xl font-black text-slate-800"><?php echo $total_users; ?> ท่าน</h3>
-                        </div>
-                    </div>
-                </a>
-            </div>
-
-            <!-- ส่วนแสดงตัวเลขการเงิน (แสดงเฉพาะสิทธิ์ Admin เท่านั้น) -->
-            <?php if ($is_admin): ?>
-            <div>
-                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <i class="fa fa-wallet text-slate-400"></i> ข้อมูลสรุปการเงิน (เฉพาะผู้ดูแลระบบ)
-                </h3>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-emerald-500">
-                        <p class="text-xs text-gray-400 font-bold uppercase">รายได้วันนี้</p>
-                        <h3 class="text-xl font-black text-emerald-600 mt-1">฿<span><?php echo number_format($income_today, 2); ?></span></h3>
-                    </div>
-
-                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-rose-500">
-                        <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายวันนี้</p>
-                        <h3 class="text-xl font-black text-rose-600 mt-1">฿<span><?php echo number_format($expense_today, 2); ?></span></h3>
-                    </div>
-
-                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-indigo-500">
-                        <p class="text-xs text-gray-400 font-bold uppercase">รายได้เดือนนี้</p>
-                        <h3 class="text-xl font-black text-indigo-600 mt-1">฿<span><?php echo number_format($income_month, 2); ?></span></h3>
-                    </div>
-
-                    <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-slate-700">
-                        <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายเดือนนี้</p>
-                        <h3 class="text-xl font-black text-slate-700 mt-1">฿<span><?php echo number_format($expense_month, 2); ?></span></h3>
-                    </div>
-                </div>
-            </div>
+<!-- Sidebar -->
+<aside id="sidebar" class="w-64 bg-slate-900 text-white shadow-xl fixed md:sticky top-0 h-screen z-50 -translate-x-full md:translate-x-0 transition-transform duration-300 flex flex-col font-sans">
+    <div class="p-6 text-center border-b border-slate-800 flex justify-between items-center">
+        <h1 class="text-2xl font-black text-white tracking-tighter w-full">ระบบหลังบ้าน</h1>
+        <button class="md:hidden text-gray-400" onclick="toggleSidebar()"><i class="fa fa-times"></i></button>
+    </div>
+    
+    <nav class="flex-grow p-4 space-y-2 mt-2 overflow-y-auto">
+        <!-- เมนูทั่วไป: Admin และ Staff เข้าถึงได้ทุกคน -->
+        <a href="admin_dashboard.php" class="flex items-center p-3 rounded-xl <?php echo navClass('admin_dashboard.php', $current_page); ?>">
+            <i class="fa fa-home w-6 text-center"></i> <span class="ml-2">หน้าแรก</span>
+        </a>
+        <a href="manage_rafts.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_rafts.php', $current_page); ?>">
+            <i class="fa fa-ship w-6 text-center"></i> <span class="ml-2">จัดการแพ</span>
+        </a>
+        <a href="manage_bookings.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_bookings.php', $current_page); ?>">
+            <i class="fa fa-calendar-check w-6 text-center"></i> <span class="ml-2 flex-grow">รายการจอง</span>
+            <?php if ($pending_count > 0): ?>
+                <span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-lg ml-auto"><?php echo $pending_count; ?></span>
             <?php endif; ?>
+        </a>
+        <a href="booking_calendar.php" class="flex items-center p-3 rounded-xl <?php echo navClass('booking_calendar.php', $current_page); ?>">
+            <i class="fa fa-calendar-alt w-6 text-center"></i> <span class="ml-2">ปฏิทินการจอง</span>
+        </a>
+        <a href="manage_customers.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_customers.php', $current_page); ?>">
+            <i class="fa fa-users w-6 text-center"></i> <span class="ml-2">จัดการสมาชิก</span>
+        </a>
 
-            <!-- เมนูจัดการด่วน -->
-            <div class="bg-white rounded-3xl shadow-sm p-6 md:p-8">
-                <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-base md:text-lg font-bold text-gray-800 border-l-4 border-blue-600 pl-3">เมนูจัดการด่วน</h3>
-                </div>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <a href="add_raft.php" class="flex items-center p-5 border-2 border-dashed border-gray-100 rounded-2xl hover:border-blue-300 hover:bg-blue-50/50 transition group">
-                        <div class="bg-blue-500 text-white p-3 rounded-xl mr-4 group-hover:scale-105 transition shadow-sm">
-                            <i class="fa fa-plus text-lg"></i>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-gray-800 text-sm md:text-base">เพิ่มแพใหม่</h4>
-                            <p class="text-xs text-gray-400">ใส่รูปภาพ ราคา และรายละเอียดแพ</p>
-                        </div>
-                    </a>
-
-                    <a href="manage_rafts.php" class="flex items-center p-5 border-2 border-dashed border-gray-100 rounded-2xl hover:border-slate-300 hover:bg-slate-50/50 transition group">
-                        <div class="bg-slate-700 text-white p-3 rounded-xl mr-4 group-hover:scale-105 transition shadow-sm">
-                            <i class="fa fa-ship text-lg"></i>
-                        </div>
-                        <div>
-                            <h4 class="font-bold text-gray-800 text-sm md:text-base">จัดการแพทั้งหมด</h4>
-                            <p class="text-xs text-gray-400">ตรวจสอบสถานะ แก้ไข หรือลบแพ</p>
-                        </div>
-                    </a>
-                </div>
+        <!-- เมนูเฉพาะ Admin (role_id = 1) เท่านั้น -->
+        <?php if (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1): ?>
+            <div class="pt-4 pb-1 px-3 text-[10px] font-bold uppercase text-slate-500 tracking-wider">
+                สำหรับผู้ดูแลระบบ / ผู้จัดการ
             </div>
+            
+            <a href="manage_users.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_users.php', $current_page); ?>">
+                <i class="fa fa-user-tie w-6 text-center"></i> <span class="ml-2">จัดการพนักงาน</span>
+            </a>
+            <a href="manage_finances.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_finances.php', $current_page); ?>">
+                <i class="fa fa-wallet w-6 text-center"></i> <span class="ml-2">บัญชี-รายจ่าย</span>
+            </a>
+            <a href="manage_reports.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_reports.php', $current_page); ?>">
+                <i class="fa fa-chart-line w-6 text-center"></i> <span class="ml-2">รายงานวิเคราะห์</span>
+            </a>
+            <a href="manage_settings.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_settings.php', $current_page); ?>">
+                <i class="fa fa-cog w-6 text-center"></i> <span class="ml-2">ตั้งค่าระบบ</span>
+            </a>
+        <?php endif; ?>
 
-            <!-- ตารางรายการจองล่าสุด -->
-            <div class="bg-white rounded-3xl shadow-sm p-6 md:p-8">
-                <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-base md:text-lg font-bold text-gray-800 border-l-4 border-blue-600 pl-3">รายการจองล่าสุด 5 รายการ</h3>
-                    <a href="manage_bookings.php" class="text-blue-600 hover:text-blue-700 font-bold text-xs md:text-sm">ดูรายการจองทั้งหมด →</a>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left font-sans">
-                        <thead class="bg-slate-50 text-slate-400 text-[11px] uppercase font-black tracking-widest border-b border-slate-100">
-                            <tr>
-                                <th class="p-4">รหัสจอง</th>
-                                <th class="p-4">ผู้จอง</th>
-                                <th class="p-4">แพ</th>
-                                <th class="p-4">วันเช็คอิน</th>
-                                <th class="p-4">ยอดรวม</th>
-                                <th class="p-4 text-center">สถานะ</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-50 text-sm">
-                            <?php if (!empty($recent_bookings)): ?>
-                                <?php foreach ($recent_bookings as $row): 
-                                    $booker = !empty($row['guest_name']) ? $row['guest_name'] : ($row['customer_name'] ?? 'ลูกค้าทั่วไป');
-                                    
-                                    $status_map = [
-                                        '1'         => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
-                                        '2'         => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
-                                        '3'         => ['bg-rose-100 text-rose-700', 'ยกเลิก'],
-                                        '4'         => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
-                                        'pending'   => ['bg-amber-100 text-amber-700', 'รอตรวจสอบ'],
-                                        'confirmed' => ['bg-emerald-100 text-emerald-700', 'ยืนยันแล้ว'],
-                                        'completed' => ['bg-blue-100 text-blue-700', 'เสร็จสิ้น'],
-                                        'cancelled' => ['bg-rose-100 text-rose-700', 'ยกเลิก']
-                                    ];
-                                    $st_key = (string)($row['status_id'] ?? $row['status'] ?? '1');
-                                    $badge = $status_map[$st_key] ?? ['bg-gray-100 text-gray-700', 'รอตรวจสอบ'];
+        <!-- ปุ่มสำหรับคลิกไปแชทตอบลูกค้าผ่าน LINE (ใช้ SVG โดยตรง) -->
+        <a href="https://lin.ee/YOUR_LINE_ID" target="_blank" class="flex items-center p-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-3 border border-emerald-500/20">
+            <svg class="w-6 h-6 fill-current text-center shrink-0" viewBox="0 0 24 24">
+                <path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.282.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08-.085.643-.388 2.527-.428 2.768-.073.426.335.792.733.522 3.208-2.17 8.652-5.182 11.83-8.871C23.364 14.502 24 12.518 24 10.314"/>
+            </svg>
+            <span class="ml-2">ตอบลูกค้า (LINE)</span>
+        </a>
+    </nav>
 
-                                    $checkin_display = !empty($row['check_in_date']) ? date('d/m/Y', strtotime($row['check_in_date'])) : (!empty($row['check_in']) ? date('d/m/Y', strtotime($row['check_in'])) : '-');
-                                    if (!empty($row['check_in_time'])) {
-                                        $checkin_display .= ' ' . substr($row['check_in_time'], 0, 5);
-                                    }
-                                    $booking_code = $row['booking_code'] ?? ('#' . str_pad($row['id'], 6, '0', STR_PAD_LEFT));
-                                    $total_price = $row['total_amount'] ?? $row['total_price'] ?? $row['paid_amount'] ?? 0;
-                                ?>
-                                <tr class="hover:bg-slate-50 transition">
-                                    <td class="p-4 font-mono font-bold text-blue-600">
-                                        <?php echo htmlspecialchars($booking_code); ?>
-                                    </td>
-                                    <td class="p-4 font-bold text-slate-700"><?php echo htmlspecialchars($booker); ?></td>
-                                    <td class="p-4 text-slate-600"><?php echo htmlspecialchars($row['raft_name'] ?? '-'); ?></td>
-                                    <td class="p-4 text-slate-500"><?php echo $checkin_display; ?></td>
-                                    <td class="p-4 font-bold text-emerald-600">฿<?php echo number_format($total_price); ?></td>
-                                    <td class="p-4 text-center">
-                                        <span class="px-3 py-1 rounded-full text-xs font-bold <?php echo $badge[0]; ?>"><?php echo $badge[1]; ?></span>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <tr><td colspan="6" class="p-8 text-center text-slate-400">ยังไม่มีรายการจองในระบบ</td></tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-        </div>
-    </main>
-
-    <script>
-        function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('sidebarOverlay');
-            if (sidebar) {
-                sidebar.classList.toggle('-translate-x-full');
-                sidebar.classList.toggle('sidebar-active');
-            }
-            if (overlay) {
-                overlay.classList.toggle('hidden');
-            }
-        }
-    </script>
-</body>
-</html>
+    <div class="p-4 border-t border-slate-800">
+        <a href="logout.php" onclick="return confirm('คุณต้องการออกจากระบบหรือไม่?')" class="flex items-center p-3 text-red-400 hover:bg-red-900/20 rounded-xl transition">
+            <i class="fa fa-sign-out-alt w-6 text-center"></i> <span class="ml-2">ออกจากระบบ</span>
+        </a>
+    </div>
+</aside>
