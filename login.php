@@ -3,6 +3,18 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+// ตั้งค่า Cookie Session เพื่อป้องกันปัญหา State Mismatch บน Render (HTTPS)
+ini_set('session.cookie_samesite', 'None');
+ini_set('session.cookie_secure', 'True');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'domain' => '',
+    'secure' => true,
+    'httponly' => true,
+    'samesite' => 'None'
+]);
+
 session_start();
 require_once __DIR__ . '/db_config.php';
 
@@ -102,6 +114,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 เข้าสู่ระบบ
             </button>
         </form>
+
+        <!-- เส้นแบ่ง -->
+        <div class="my-6 flex items-center justify-between">
+            <span class="border-b w-1/5 lg:w-1/4"></span>
+            <span class="text-xs text-center text-gray-400 font-bold uppercase">หรือ</span>
+            <span class="border-b w-1/5 lg:w-1/4"></span>
+        </div>
+
+        <!-- ปุ่มเข้าสู่ระบบด้วย LINE -->
+        <a href="line_login.php" class="w-full flex items-center justify-center gap-2 bg-[#06C755] hover:bg-[#05b34c] text-white font-bold py-3 rounded-xl shadow-lg transition duration-300">
+            <i class="fa-brands fa-line text-2xl"></i>
+            <span>เข้าสู่ระบบด้วย LINE</span>
+        </a>
 
         <div class="mt-8 text-center text-sm">
             <a href="index.php" class="text-gray-400 hover:text-gray-600">← กลับไปหน้าแรก</a>
