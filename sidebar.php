@@ -89,10 +89,15 @@ function navClass($page_name, $current_page) {
                 <i class="fa fa-cog w-6 text-center"></i> <span class="ml-2">ตั้งค่าระบบ</span>
             </a>
         <?php endif; ?>
+
+        <!-- ปุ่มสำหรับคลิกไปแชทตอบลูกค้าผ่าน LINE -->
+        <a href="https://lin.ee/YOUR_LINE_ID" target="_blank" class="flex items-center p-3 rounded-xl text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500 hover:text-white transition font-bold mt-3 border border-emerald-500/20">
+            <i class="fab fa-line w-6 text-center text-lg"></i> <span class="ml-2">ตอบลูกค้า (LINE)</span>
+        </a>
     </nav>
 
     <div class="p-4 border-t border-slate-800">
-        <a href="logout.php" class="flex items-center p-3 text-red-400 hover:bg-red-900/20 rounded-xl transition">
+        <a href="logout.php" onclick="return confirm('คุณต้องการออกจากระบบหรือไม่?')" class="flex items-center p-3 text-red-400 hover:bg-red-900/20 rounded-xl transition">
             <i class="fa fa-sign-out-alt w-6 text-center"></i> <span class="ml-2">ออกจากระบบ</span>
         </a>
     </div>
