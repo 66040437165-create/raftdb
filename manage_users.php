@@ -8,15 +8,22 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSI
     exit();
 }
 
+$current_user_id = (int)$_SESSION['user_id'];
+
 // 2. ระบบเพิ่มพนักงานใหม่
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_employee'])) {
-    $username  = trim($_POST['username']);
-    $password  = trim($_POST['password']);
-    $full_name = trim($_POST['full_name']);
+    $username  = trim($_POST['username'] ?? '');
+    $password  = trim($_POST['password'] ?? '');
+    $full_name = trim($_POST['full_name'] ?? '');
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id']); // 1 = Admin/ผู้จัดการ, 2 = พนักงานทั่วไป
+    $role_id   = intval($_POST['role_id'] ?? 2); // 1 = Admin/ผู้จัดการ, 2 = พนักงานทั่วไป
     $is_active = isset($_POST['is_active']) ? intval($_POST['is_active']) : 1;
+
+    if (empty($username) || empty($password) || empty($full_name)) {
+        header("Location: manage_users.php?msg=error");
+        exit();
+    }
 
     // ตรวจสอบ username ซ้ำ
     $chk = $conn->prepare("SELECT id FROM employees WHERE username = ? LIMIT 1");
@@ -47,15 +54,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_employee'])) {
 // 3. ระบบแก้ไขข้อมูลและบทบาทพนักงาน
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_employee'])) {
     $emp_id    = intval($_POST['emp_id']);
-    $full_name = trim($_POST['full_name']);
+    $full_name = trim($_POST['full_name'] ?? '');
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id']);
-    $is_active = intval($_POST['is_active']);
-    $password  = trim($_POST['password']);
+    $role_id   = intval($_POST['role_id'] ?? 2);
+    $is_active = intval($_POST['is_active'] ?? 1);
+    $password  = trim($_POST['password'] ?? '');
 
     // หากแอดมินแก้ไขข้อมูลของตนเอง ห้ามเปลี่ยนบทบาทและห้ามระงับบัญชีตนเอง
-    if ($emp_id === (int)$_SESSION['user_id']) {
+    if ($emp_id === $current_user_id) {
         $role_id   = 1;
         $is_active = 1;
     }
@@ -85,7 +92,7 @@ if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
     
     // ป้องกันแอดมินลบบัญชีของตัวเอง
-    if ($delete_id === (int)$_SESSION['user_id']) {
+    if ($delete_id === $current_user_id) {
         header("Location: manage_users.php?msg=error_self");
     } else {
         $stmt = $conn->prepare("DELETE FROM employees WHERE id = ?");
@@ -154,7 +161,7 @@ $result = $conn->query($sql);
                 ?>
                 <div class="<?php echo $msg_type == 'success' ? 'bg-emerald-500 shadow-emerald-100' : 'bg-rose-500 shadow-rose-100'; ?> text-white p-4 rounded-2xl mb-8 shadow-lg flex items-center gap-3">
                     <i class="fa <?php echo $msg_type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?> text-xl"></i>
-                    <span class="font-bold"><?php echo $msg_text; ?></span>
+                    <span class="font-bold"><?php echo htmlspecialchars($msg_text); ?></span>
                 </div>
             <?php endif; ?>
 
@@ -210,13 +217,13 @@ $result = $conn->query($sql);
                                 <td class="p-6 text-center">
                                     <div class="flex justify-center items-center gap-2">
                                         <button type="button" 
-                                                onclick='openEditModal(<?php echo json_encode($row); ?>)'
+                                                onclick='openEditModal(<?php echo json_encode($row, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP); ?>)'
                                                 title="แก้ไขข้อมูลและสิทธิ์" 
                                                 class="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-500 hover:text-white transition flex items-center justify-center shadow-sm">
                                             <i class="fa fa-edit text-xs"></i>
                                         </button>
 
-                                        <?php if($row['id'] != $_SESSION['user_id']): ?>
+                                        <?php if((int)$row['id'] !== $current_user_id): ?>
                                             <a href="?delete_id=<?php echo $row['id']; ?>" 
                                                onclick="return confirm('ยืนยันการลบผู้ใช้งานรายนี้?')"
                                                title="ลบพนักงาน" 
@@ -323,6 +330,11 @@ $result = $conn->query($sql);
                         <input type="email" name="email" id="edit_email" class="w-full p-2.5 bg-slate-50 border rounded-xl outline-none focus:border-blue-500">
                     </div>
                 </div>
+
+                <!-- Hidden inputs สำรองไว้ส่งค่าเมื่อถูก disabled ในหน้าแอดมินตัวเอง -->
+                <input type="hidden" name="role_id" id="edit_role_id_hidden" value="1">
+                <input type="hidden" name="is_active" id="edit_is_active_hidden" value="1">
+
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="font-bold text-slate-600 block mb-1">บทบาท / ตำแหน่ง *</label>
@@ -363,20 +375,29 @@ $result = $conn->query($sql);
             document.getElementById('edit_full_name').value = emp.full_name;
             document.getElementById('edit_email').value = emp.email || '';
             document.getElementById('edit_phone').value = emp.phone || '';
-            document.getElementById('edit_role_id').value = emp.role_id;
-            document.getElementById('edit_is_active').value = emp.is_active;
             
-            // กรณีเป็นบัญชีของแอดมินคนปัจจุบัน ล็อกไม่ให้เปลี่ยน role_id และ is_active ของตนเอง
-            const currentUserId = <?php echo (int)$_SESSION['user_id']; ?>;
+            const currentUserId = <?php echo $current_user_id; ?>;
             const roleSelect = document.getElementById('edit_role_id');
             const activeSelect = document.getElementById('edit_is_active');
-            
+            const roleHidden = document.getElementById('edit_role_id_hidden');
+            const activeHidden = document.getElementById('edit_is_active_hidden');
+
+            roleSelect.value = emp.role_id;
+            activeSelect.value = emp.is_active;
+
             if (parseInt(emp.id) === currentUserId) {
+                // สำหรับบัญชีตนเอง ปิดการแก้ไขสิทธิ์/สถานะ ป้องกันการถอดสิทธิ์ตนเอง
                 roleSelect.disabled = true;
                 activeSelect.disabled = true;
+                roleHidden.disabled = false;
+                activeHidden.disabled = false;
+                roleHidden.value = 1;
+                activeHidden.value = 1;
             } else {
                 roleSelect.disabled = false;
                 activeSelect.disabled = false;
+                roleHidden.disabled = true;
+                activeHidden.disabled = true;
             }
 
             document.getElementById('editEmpModal').classList.remove('hidden');
