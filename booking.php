@@ -1,55 +1,45 @@
 <?php
 session_start();
+require_once __DIR__ . '/db_config.php';
 
-// รองรับ path ไฟล์ db_config.php ทั้งในโฟลเดอร์เดียวกันและโฟลเดอร์หลัก
-if (file_exists(__DIR__ . '/db_config.php')) {
-    require_once __DIR__ . '/db_config.php';
-} else {
-    require_once __DIR__ . '/../db_config.php';
-}
+// 1. ดึงข้อมูลผู้ใช้งาน (ถ้าล็อกอินอยู่)
+$is_logged_in = isset($_SESSION['user_id']);$user_id = $is_logged_in ? intval($_SESSION['user_id']) : null;
+$user_fullname =$is_logged_in ? ($_SESSION['fullname'] ?? '') : '';$user_tel = '';
 
-// 1. ดึงข้อมูลผู้ใช้งาน (ถ้าล็อคอินอยู่)
-$is_logged_in = isset($_SESSION['user_id']);
-$user_id = $is_logged_in ? intval($_SESSION['user_id']) : null;
-$user_fullname = $is_logged_in ? ($_SESSION['fullname'] ?? '') : '';
-$user_tel = '';
-
-if ($is_logged_in && $conn) {
-    $is_admin = isset($_SESSION['role']) && $_SESSION['role'] === 'admin';
+if ($is_logged_in && $conn) {$is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || 
+                (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1);
+    
     if ($is_admin) {
-        $user_fullname = '';
-        $user_tel = '';
+        $user_fullname = '';$user_tel = '';
     } else {
-        // ดึงข้อมูลผู้ใช้จากตาราง users (PostgreSQL syntax)
+        // ดึงข้อมูลผู้ใช้จากตาราง users
         $user_res = @pg_query_params($conn, "SELECT * FROM users WHERE id = $1 LIMIT 1", array($user_id));
-        if ($user_res && pg_num_rows($user_res) > 0) {
-            $user_data = pg_fetch_assoc($user_res);
-            $user_tel = $user_data['tel'] ?? $user_data['phone'] ?? '';
+        if ($user_res && pg_num_rows($user_res) > 0) {$user_data = pg_fetch_assoc($user_res);$user_tel = $user_data['tel'] ?? $user_data['phone'] ?? '';
             if (empty($user_fullname)) {
-                $user_fullname = $user_data['fullname'] ?? $user_data['name'] ?? '';
+                $user_fullname =$user_data['fullname'] ?? $user_data['full_name'] ?? $user_data['name'] ?? '';
             }
         }
     }
 }
 
-// 2. ตรวจสอบข้อมูลแพที่เลือก (ใช้คอลัมน์ id)
+// 2. ตรวจสอบข้อมูลแพที่เลือก
 if (!isset($_GET['raft_id']) || empty($_GET['raft_id'])) { 
     header("Location: index.php"); 
     exit(); 
 }
 
 $raft_id = intval($_GET['raft_id']);
-$checkin_val = $_GET['checkin'] ?? date('Y-m-d'); 
+$checkin_val =$_GET['checkin'] ?? date('Y-m-d'); 
 $checkout_val = $_GET['checkout'] ?? date('Y-m-d', strtotime($checkin_val . ' +1 day')); 
-$checkin_time_val = $_GET['checkin_time'] ?? '09:00';
-$checkout_time_val = $_GET['checkout_time'] ?? '17:30';
+$checkin_time_val =$_GET['checkin_time'] ?? '09:00';
+$checkout_time_val =$_GET['checkout_time'] ?? '17:30';
 
-// ดึงข้อมูลแพตาม id (PostgreSQL Parameterized Query)
+// ดึงข้อมูลแพตาม id (PostgreSQL)
 $raft = null;
 if ($conn) {
-    $stmt = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1 LIMIT 1", array($raft_id));
-    if ($stmt && pg_num_rows($stmt) > 0) {
-        $raft = pg_fetch_assoc($stmt);
+    $stmt_raft = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1 LIMIT 1", array($raft_id));
+    if ($stmt_raft) {
+        $raft = pg_fetch_assoc($stmt_raft);
     }
 }
 
@@ -58,54 +48,54 @@ if (!$raft) {
     exit(); 
 }
 
-// ดึงรูปภาพทั้งหมด (รองรับทั้งตาราง raft_images และ คอลัมน์ image_1 ถึง image_5 ในตาราง rafts)
+// ดึงรูปภาพทั้งหมด
 $images = [];
 
-// 2.1 ลองดึงจากตาราง raft_images (ถ้ามี)
-$res_imgs = @pg_query_params($conn, "SELECT image_path, is_main FROM raft_images WHERE raft_id = $1 ORDER BY is_main DESC", array($raft_id));
-if ($res_imgs && pg_num_rows($res_imgs) > 0) {
-    while($img = pg_fetch_assoc($res_imgs)) {
-        $images[] = $img;
-    }
-}
-
-// 2.2 ถ้าใน raft_images ไม่มี ให้ดึงจากคอลัมน์ featured_image และ image_1 ถึง image_5 ในตาราง rafts
-if (empty($images)) {
-    if (!empty($raft['featured_image'])) {
-        $images[] = ['image_path' => $raft['featured_image'], 'is_main' => 1];
-    }
-    
-    for ($i = 1; $i <= 5; $i++) {
-        $col_name = "image_" . $i;
-        if (!empty($raft[$col_name])) {
-            // ไม่ให้เพิ่มซ้ำกับ featured_image
-            if (empty($images) || $raft[$col_name] !== ($raft['featured_image'] ?? '')) {
-                $images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+// 2.1 ตรวจสอบและดึงจากตาราง raft_images (ถ้ามีตาราง)
+if ($conn) {
+    $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
+    $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
+    if ($has_tbl) {
+        $res_imgs = @pg_query_params($conn, "SELECT image_path, is_main FROM raft_images WHERE raft_id = $1 ORDER BY is_main DESC", array($raft_id));
+        if ($res_imgs && pg_num_rows($res_imgs) > 0) {
+            while ($img = pg_fetch_assoc($res_imgs)) {
+                $images[] =$img;
             }
         }
     }
 }
 
-$main_image = !empty($images) ? $images[0]['image_path'] : '';
+// 2.2 ถ้าใน raft_images ไม่มี ให้ดึงจากคอลัมน์ featured_image และ image_1 ถึง image_5
+if (empty($images)) {
+    if (!empty($raft['featured_image'])) {
+        $images[] = ['image_path' =>$raft['featured_image'], 'is_main' => 1];
+    }
+    
+    for ($i = 1; $i <= 5; $i++) {
+        $col_name = "image_" . $i;
+        if (!empty($raft[$col_name])) {$images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+        }
+    }
+}
 
-// 3. ดึงค่าตั้งค่า (เวลาเปิด-ปิด)
+$main_image = !empty($images) ?$images[0]['image_path'] : '';
+
+// 3. ดึงค่าตั้งค่าเวลาเปิด-ปิด
 $settings = [];
 if ($conn) {
     $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings");
     if ($res_settings) {
-        while ($row = pg_fetch_assoc($res_settings)) {
-            $settings[$row['setting_key']] = $row['setting_value'];
+        while ($row = pg_fetch_assoc($res_settings)) {$settings[$row['setting_key']] =$row['setting_value'];
         }
     }
 }
-$open_time = $settings['open_time'] ?? '09:00';
-$close_time = $settings['close_time'] ?? '17:30';
+$open_time =$settings['open_time'] ?? '09:00';
+$close_time =$settings['close_time'] ?? '17:30';
 
 if (empty($_GET['checkin_time'])) {
-    $checkin_time_val = $open_time;
+    $checkin_time_val =$open_time;
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -131,7 +121,7 @@ if (empty($_GET['checkin_time'])) {
         <div class="relative group">
             <!-- Main Image -->
             <div class="h-64 md:h-80 relative overflow-hidden cursor-pointer" onclick="openLightbox(currentGalleryIndex)">
-                <?php if(!empty($main_image)): ?>
+                <?php if (!empty($main_image)): ?>
                     <img id="mainBookingImage" src="uploads/<?php echo htmlspecialchars($main_image); ?>" class="w-full h-full object-cover transition-all duration-500 group-hover:scale-105">
                 <?php else: ?>
                     <div class="w-full h-full bg-slate-200 flex items-center justify-center text-slate-400 font-bold">ไม่มีรูปภาพ</div>
@@ -148,15 +138,15 @@ if (empty($_GET['checkin_time'])) {
                     <div>
                         <span class="bg-blue-600 text-white text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest mb-2 inline-block shadow-lg shadow-blue-500/30">ยืนยันการจอง</span>
                         <h1 class="text-3xl font-black text-white"><?php echo htmlspecialchars($raft['name']); ?></h1>
-                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo htmlspecialchars($raft['capacity']); ?> ท่าน</p>
+                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $raft['capacity']; ?> ท่าน</p>
                     </div>
                 </div>
             </div>
 
             <!-- Image Thumbnails -->
-            <?php if(count($images) > 1): ?>
+            <?php if (count($images) > 1): ?>
                 <div class="flex gap-2 p-3 bg-slate-900/90 backdrop-blur-md overflow-x-auto no-scrollbar scroll-smooth">
-                    <?php foreach($images as $index => $img): ?>
+                    <?php foreach ($images as $index =>$img): ?>
                         <div class="shrink-0 cursor-pointer group" onclick="setGalleryIndex(<?php echo $index; ?>)">
                             <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
                                  class="main-thumb-item w-20 h-16 md:w-24 md:h-20 object-cover rounded-xl border-2 <?php echo ($index == 0) ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'; ?> transition-all duration-300"
@@ -176,11 +166,11 @@ if (empty($_GET['checkin_time'])) {
             <input type="hidden" name="booking_type" id="booking_type" value="daily">
             
             <input type="hidden" id="price_per_day" value="<?php echo $raft['price_per_day']; ?>">
-            <input type="hidden" id="price_per_hour" value="<?php echo isset($raft['price_per_hour']) ? $raft['price_per_hour'] : 0; ?>">
+            <input type="hidden" id="price_per_hour" value="<?php echo isset($raft['price_per_hour']) ?$raft['price_per_hour'] : 0; ?>">
             <input type="hidden" name="total_price" id="total_price_input" value="<?php echo $raft['price_per_day']; ?>">
             
-            <input type="hidden" id="setting_open_time" value="<?php echo htmlspecialchars($open_time); ?>">
-            <input type="hidden" id="setting_close_time" value="<?php echo htmlspecialchars($close_time); ?>">
+            <input type="hidden" id="setting_open_time" value="<?php echo $open_time; ?>">
+            <input type="hidden" id="setting_close_time" value="<?php echo $close_time; ?>">
 
             <div class="space-y-8">
                 <!-- Section 1: Guest Information -->
@@ -228,7 +218,7 @@ if (empty($_GET['checkin_time'])) {
                         <!-- Booking Type Toggle -->
                         <div class="p-1 bg-gray-100 rounded-2xl flex">
                             <button type="button" id="btn_daily" onclick="setBookingType('daily')" 
-                                    class="flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300">
+                                    class="flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300 shadow-md scale-105">
                                 <i class="fa fa-sun-o mr-2"></i> เหมาทั้งวัน
                             </button>
                             <button type="button" id="btn_hourly" onclick="setBookingType('hourly')" 
@@ -249,7 +239,7 @@ if (empty($_GET['checkin_time'])) {
                             <!-- Check-in Time -->
                             <div class="space-y-2">
                                 <label class="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">เวลาเช็คอิน</label>
-                                <input type="time" name="check_in_time" id="check_in_time" value="<?php echo $checkin_time_val; ?>" required onchange="calculatePrice()"
+                                <input type="time" name="check_in_time" id="check_in_time" value="<?php echo $checkin_time_val; ?>" required onchange="calculatePrice()" readonly
                                        class="w-full h-12 px-4 bg-gray-50 border-2 border-transparent focus:border-blue-500 focus:bg-white rounded-2xl outline-none font-bold text-gray-700 transition">
                             </div>
                         </div>
@@ -266,7 +256,7 @@ if (empty($_GET['checkin_time'])) {
                 </div>
 
                 <input type="hidden" name="check_out" id="check_out_date_hidden" value="<?php echo $checkout_val; ?>">
-                <input type="hidden" name="check_out_time_hidden" id="check_out_time_hidden" value="<?php echo htmlspecialchars($close_time); ?>">
+                <input type="hidden" name="check_out_time_hidden" id="check_out_time_hidden" value="<?php echo $close_time; ?>">
 
                 <!-- Section 3: Pricing Summary -->
                 <div class="pt-2">
@@ -275,7 +265,7 @@ if (empty($_GET['checkin_time'])) {
                         <div class="relative z-10 flex justify-between items-center text-white">
                             <div class="text-left">
                                 <p class="text-[10px] text-blue-200 bg-black/10 px-3 py-2 rounded-xl border border-white/10 backdrop-blur-sm" id="price_note">
-                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo htmlspecialchars($open_time); ?> - <?php echo htmlspecialchars($close_time); ?> น.
+                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo $open_time; ?> - <?php echo$close_time; ?> น.
                                 </p>
                             </div>
                             <div class="text-right">
@@ -294,96 +284,11 @@ if (empty($_GET['checkin_time'])) {
                     <i class="fa fa-check-circle text-xl group-hover:scale-125 transition-transform"></i>
                 </button>
             </div>
-
-            <script>
-                function setBookingType(type) {
-                    document.getElementById('booking_type').value = type;
-                    const btnDaily = document.getElementById('btn_daily');
-                    const btnHourly = document.getElementById('btn_hourly');
-                    const checkoutSection = document.getElementById('checkout_section');
-                    const checkoutTimeInput = document.getElementById('check_out_time');
-                    const priceCard = document.getElementById('price_card');
-                    const priceNote = document.getElementById('price_note');
-
-                    if (type === 'daily') {
-                        btnDaily.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300 shadow-md scale-105';
-                        btnHourly.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm text-gray-500 hover:text-gray-700 transition duration-300';
-                        checkoutSection.classList.add('hidden');
-                        checkoutTimeInput.removeAttribute('required');
-                        priceCard.className = 'bg-blue-600 p-6 rounded-[2rem] shadow-xl shadow-blue-500/20 relative overflow-hidden transition-all duration-300';
-                        
-                        const openTime = document.getElementById('setting_open_time').value;
-                        const closeTime = document.getElementById('setting_close_time').value;
-                        priceNote.innerHTML = `<i class="fa fa-info-circle mr-1"></i> เหมาทั้งวัน เวลา ${openTime} - ${closeTime} น.`;
-                        
-                        document.getElementById('check_in_time').value = openTime;
-                        document.getElementById('check_in_time').readOnly = true;
-                    } else {
-                        btnHourly.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300 shadow-md scale-105';
-                        btnDaily.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm text-gray-500 hover:text-gray-700 transition duration-300';
-                        checkoutSection.classList.remove('hidden');
-                        checkoutTimeInput.setAttribute('required', 'required');
-                        priceCard.className = 'bg-emerald-600 p-6 rounded-[2rem] shadow-xl shadow-emerald-500/20 relative overflow-hidden transition-all duration-300';
-                        const pricePerHourVal = parseFloat(document.getElementById('price_per_hour').value);
-                        priceNote.innerHTML = `<i class="fa fa-info-circle mr-1"></i> คิดราคาตามจริง รายชั่วโมง (ชม.ละ ${new Intl.NumberFormat().format(pricePerHourVal)} บาท)`;
-                        
-                        document.getElementById('check_in_time').readOnly = false;
-                    }
-                    calculatePrice();
-                }
-
-                function calculatePrice() {
-                    const type = document.getElementById('booking_type').value;
-                    const pricePerDay = parseFloat(document.getElementById('price_per_day').value);
-                    const pricePerHour = parseFloat(document.getElementById('price_per_hour').value);
-                    
-                    const displayPrice = document.getElementById('display_price');
-                    const priceLabel = document.getElementById('price_label');
-                    const totalPriceInput = document.getElementById('total_price_input');
-
-                    if (type === 'daily') {
-                        priceLabel.innerText = "ราคาเหมาจ่ายต่อวัน";
-                        displayPrice.innerText = new Intl.NumberFormat().format(pricePerDay);
-                        totalPriceInput.value = pricePerDay;
-                        
-                        const checkInDate = document.getElementById('check_in').value;
-                        const closeTime = document.getElementById('setting_close_time').value;
-                        if (checkInDate) {
-                            document.getElementById('check_out_date_hidden').value = checkInDate;
-                            document.getElementById('check_out_time_hidden').value = closeTime;
-                        }
-                    } else {
-                        priceLabel.innerText = "ราคารวม (รายชั่วโมง)";
-                        const checkInTime = document.getElementById('check_in_time').value;
-                        const checkOutTime = document.getElementById('check_out_time').value;
-
-                        if (checkInTime && checkOutTime) {
-                            const today = new Date().toISOString().split('T')[0];
-                            const start = new Date(today + "T" + checkInTime);
-                            const end = new Date(today + "T" + checkOutTime);
-                            
-                            let diffMs = end - start;
-                            if (diffMs <= 0) { 
-                                diffMs += 24 * 60 * 60 * 1000; 
-                            }
-
-                            const diffHrs = Math.ceil(diffMs / (1000 * 60 * 60));
-                            const total = diffHrs * pricePerHour;
-
-                            displayPrice.innerText = new Intl.NumberFormat().format(total);
-                            totalPriceInput.value = total;
-                        } else {
-                            displayPrice.innerText = "0";
-                        }
-                    }
-                }
-            </script>
         </form>
     </div>
 
     <!-- Fullscreen Interactive Lightbox Gallery Modal -->
     <div id="lightboxModal" class="fixed inset-0 bg-black/95 backdrop-blur-md z-50 hidden flex flex-col justify-between p-4 md:p-8 select-none transition-opacity duration-300">
-        <!-- Lightbox Header -->
         <div class="flex justify-between items-center text-white z-10">
             <div class="flex items-center gap-3">
                 <span class="bg-blue-600 px-3 py-1 rounded-full text-xs font-bold shadow-lg" id="lightboxCounter">1 / 1</span>
@@ -394,9 +299,8 @@ if (empty($_GET['checkin_time'])) {
             </button>
         </div>
 
-        <!-- Center Image + Navigation -->
         <div class="relative flex-grow flex items-center justify-center my-4 overflow-hidden">
-            <?php if(count($images) > 1): ?>
+            <?php if (count($images) > 1): ?>
                 <button type="button" onclick="prevLightboxImage()" class="absolute left-2 md:left-6 z-20 w-12 h-12 md:w-14 md:h-14 bg-black/50 hover:bg-blue-600 text-white rounded-full flex items-center justify-center text-xl backdrop-blur-sm transition shadow-lg">
                     <i class="fa fa-chevron-left"></i>
                 </button>
@@ -404,17 +308,16 @@ if (empty($_GET['checkin_time'])) {
 
             <img id="lightboxImage" src="" class="max-h-[75vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl transition-all duration-300">
 
-            <?php if(count($images) > 1): ?>
+            <?php if (count($images) > 1): ?>
                 <button type="button" onclick="nextLightboxImage()" class="absolute right-2 md:right-6 z-20 w-12 h-12 md:w-14 md:h-14 bg-black/50 hover:bg-blue-600 text-white rounded-full flex items-center justify-center text-xl backdrop-blur-sm transition shadow-lg">
                     <i class="fa fa-chevron-right"></i>
                 </button>
             <?php endif; ?>
         </div>
 
-        <!-- Bottom Thumbnail Strip inside Lightbox -->
-        <?php if(count($images) > 1): ?>
+        <?php if (count($images) > 1): ?>
             <div class="flex justify-center gap-2 overflow-x-auto py-2 no-scrollbar max-w-full">
-                <?php foreach($images as $idx =>$img): ?>
+                <?php foreach ($images as $idx =>$img): ?>
                     <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
                          onclick="setLightboxImage(<?php echo $idx; ?>)"
                          class="lightbox-thumb-item w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl border-2 cursor-pointer transition opacity-50 hover:opacity-100 shrink-0" 
@@ -427,12 +330,95 @@ if (empty($_GET['checkin_time'])) {
     <script>
         const galleryImages = <?php 
             $js_imgs = [];
-            foreach($images as$i) { 
+            foreach ($images as$i) { 
                 $js_imgs[] = 'uploads/' .$i['image_path']; 
             }
             echo json_encode(!empty($js_imgs) ? $js_imgs : ["uploads/" . $main_image]); 
         ?>;
         let currentGalleryIndex = 0;
+
+        function setBookingType(type) {
+            document.getElementById('booking_type').value = type;
+            const btnDaily = document.getElementById('btn_daily');
+            const btnHourly = document.getElementById('btn_hourly');
+            const checkoutSection = document.getElementById('checkout_section');
+            const checkoutTimeInput = document.getElementById('check_out_time');
+            const priceCard = document.getElementById('price_card');
+            const priceNote = document.getElementById('price_note');
+
+            if (type === 'daily') {
+                btnDaily.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300 shadow-md scale-105';
+                btnHourly.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm text-gray-500 hover:text-gray-700 transition duration-300';
+                checkoutSection.classList.add('hidden');
+                checkoutTimeInput.removeAttribute('required');
+                priceCard.className = 'bg-blue-600 p-6 rounded-[2rem] shadow-xl shadow-blue-500/20 relative overflow-hidden transition-all duration-300';
+                
+                const openTime = document.getElementById('setting_open_time').value;
+                const closeTime = document.getElementById('setting_close_time').value;
+                priceNote.innerHTML = `<i class="fa fa-info-circle mr-1"></i> เหมาทั้งวัน เวลา ${openTime} - ${closeTime} น.`;
+                
+                document.getElementById('check_in_time').value = openTime;
+                document.getElementById('check_in_time').readOnly = true;
+            } else {
+                btnHourly.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm shadow-sm bg-white text-blue-600 transition duration-300 shadow-md scale-105';
+                btnDaily.className = 'flex-1 py-3.5 rounded-xl font-bold text-sm text-gray-500 hover:text-gray-700 transition duration-300';
+                checkoutSection.classList.remove('hidden');
+                checkoutTimeInput.setAttribute('required', 'required');
+                priceCard.className = 'bg-emerald-600 p-6 rounded-[2rem] shadow-xl shadow-emerald-500/20 relative overflow-hidden transition-all duration-300';
+                const pricePerHourVal = parseFloat(document.getElementById('price_per_hour').value);
+                priceNote.innerHTML = `<i class="fa fa-info-circle mr-1"></i> คิดราคาตามจริง รายชั่วโมง (ชม.ละ ${new Intl.NumberFormat().format(pricePerHourVal)} บาท)`;
+                
+                document.getElementById('check_in_time').readOnly = false;
+            }
+            calculatePrice();
+        }
+
+        function calculatePrice() {
+            const type = document.getElementById('booking_type').value;
+            const pricePerDay = parseFloat(document.getElementById('price_per_day').value) || 0;
+            const pricePerHour = parseFloat(document.getElementById('price_per_hour').value) || 0;
+            
+            const displayPrice = document.getElementById('display_price');
+            const priceLabel = document.getElementById('price_label');
+            const totalPriceInput = document.getElementById('total_price_input');
+
+            if (type === 'daily') {
+                priceLabel.innerText = "ราคาเหมาจ่ายต่อวัน";
+                displayPrice.innerText = new Intl.NumberFormat().format(pricePerDay);
+                totalPriceInput.value = pricePerDay;
+                
+                const checkInDate = document.getElementById('check_in').value;
+                const closeTime = document.getElementById('setting_close_time').value;
+                if (checkInDate) {
+                    document.getElementById('check_out_date_hidden').value = checkInDate;
+                    document.getElementById('check_out_time_hidden').value = closeTime;
+                }
+            } else {
+                priceLabel.innerText = "ราคารวม (รายชั่วโมง)";
+                const checkInTime = document.getElementById('check_in_time').value;
+                const checkOutTime = document.getElementById('check_out_time').value;
+
+                if (checkInTime && checkOutTime) {
+                    const today = new Date().toISOString().split('T')[0];
+                    const start = new Date(today + " " + checkInTime);
+                    const end = new Date(today + " " + checkOutTime);
+                    
+                    let diffMs = end - start;
+                    if (diffMs <= 0) { 
+                        diffMs += 24 * 60 * 60 * 1000; 
+                    }
+
+                    const diffHrs = Math.ceil(diffMs / (1000 * 60 * 60));
+                    const total = diffHrs * pricePerHour;
+
+                    displayPrice.innerText = new Intl.NumberFormat().format(total);
+                    totalPriceInput.value = total;
+                } else {
+                    displayPrice.innerText = "0";
+                    totalPriceInput.value = 0;
+                }
+            }
+        }
 
         function setGalleryIndex(index) {
             if (index < 0 || index >= galleryImages.length) return;
