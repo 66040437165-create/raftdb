@@ -1,6 +1,6 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 // ตรวจสอบสิทธิ์การเข้าถึงของผู้ดูแลระบบ (Admin)
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
