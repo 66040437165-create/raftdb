@@ -1,10 +1,34 @@
 <?php
 session_start();
-require_once __DIR__ . '/db_config.php';
+
+if (file_exists(__DIR__ . '/db_config.php')) {
+    require_once __DIR__ . '/db_config.php';
+} else {
+    require_once __DIR__ . '/../db_config.php';
+}
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
+}
+
+// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพให้ถูกต้อง ป้องกัน Path ซ้ำซ้อน (เช่น uploads/uploads/...)
+if (!function_exists('get_raft_image_url')) {
+    function get_raft_image_url($image_path) {
+        if (empty($image_path)) {
+            return '';
+        }
+        $image_path = trim($image_path);
+        // กรณีเป็น Full URL (เช่น อัปโหลดไว้บน Cloudinary หรือโฮสต์ภายนอก)
+        if (preg_match('/^https?:\/\//i', $image_path)) {
+            return $image_path;
+        }
+        // กรณีใน Database มีคำว่า uploads/ อยู่แล้ว
+        if (strpos($image_path, 'uploads/') === 0) {
+            return $image_path;
+        }
+        return 'uploads/' . $image_path;
+    }
 }
 
 // 2. ระบบสลับสถานะ (Quick Toggle Status)
@@ -67,7 +91,10 @@ if (isset($_GET['delete_id'])) {
                 $res_pay_slips = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
                 if ($res_pay_slips) {
                     while ($ps = pg_fetch_assoc($res_pay_slips)) {
-                        if (!empty($ps['slip_image'])) { @unlink("uploads/slips/" . $ps['slip_image']); }
+                        $slip_file = "uploads/slips/" . $ps['slip_image'];
+                        if (!empty($ps['slip_image']) && file_exists($slip_file)) { 
+                            @unlink($slip_file); 
+                        }
                     }
                 }
             }
@@ -85,7 +112,10 @@ if (isset($_GET['delete_id'])) {
             $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
             if ($res_slips) {
                 while ($slip = pg_fetch_assoc($res_slips)) {
-                    if (!empty($slip['slip_image'])) { @unlink("uploads/slips/" . $slip['slip_image']); }
+                    $slip_file = "uploads/slips/" . $slip['slip_image'];
+                    if (!empty($slip['slip_image']) && file_exists($slip_file)) { 
+                        @unlink($slip_file); 
+                    }
                 }
             }
         }
@@ -100,7 +130,12 @@ if (isset($_GET['delete_id'])) {
             $res_raft_imgs = @pg_query_params($conn, "SELECT " . implode(", ", $img_cols_to_select) . " FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
                 foreach ($img_cols_to_select as $col) {
-                    if (!empty($r_img[$col])) { @unlink("uploads/" . $r_img[$col]); }
+                    if (!empty($r_img[$col])) {
+                        $target_img = (strpos($r_img[$col], 'uploads/') === 0) ? $r_img[$col] : "uploads/" . $r_img[$col];
+                        if (file_exists($target_img)) {
+                            @unlink($target_img);
+                        }
+                    }
                 }
             }
         }
@@ -110,7 +145,12 @@ if (isset($_GET['delete_id'])) {
             $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
             if ($res_imgs) {
                 while ($img = pg_fetch_assoc($res_imgs)) {
-                    if (!empty($img['image_path'])) { @unlink("uploads/" . $img['image_path']); }
+                    if (!empty($img['image_path'])) {
+                        $sub_img = (strpos($img['image_path'], 'uploads/') === 0) ? $img['image_path'] : "uploads/" . $img['image_path'];
+                        if (file_exists($sub_img)) {
+                            @unlink($sub_img);
+                        }
+                    }
                 }
             }
             @pg_query_params($conn, "DELETE FROM raft_images WHERE raft_id = $1", array($delete_id));
@@ -307,10 +347,18 @@ if ($conn) {
                         <?php if (!empty($rafts)): foreach($rafts as $row): ?>
                         <tr class="hover:bg-blue-50/20 transition">
                             <td class="p-6">
-                                <?php if(!empty($row['featured_image'])): ?>
-                                    <img src="uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-20 h-14 object-cover rounded-xl shadow-sm border border-slate-100">
+                                <?php 
+                                    $img_src = get_raft_image_url($row['featured_image'] ?? ''); 
+                                ?>
+                                <?php if(!empty($img_src)): ?>
+                                    <img src="<?php echo htmlspecialchars($img_src); ?>" 
+                                         alt="<?php echo htmlspecialchars($row['name']); ?>"
+                                         onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'w-20 h-14 bg-amber-50 border border-amber-200 rounded-xl flex flex-col items-center justify-center text-[9px] text-amber-600 font-bold text-center leading-tight p-1\'><i class=\'fa fa-image mb-0.5\'></i>รูปไม่พบ</div>';"
+                                         class="w-20 h-14 object-cover rounded-xl shadow-sm border border-slate-100">
                                 <?php else: ?>
-                                    <div class="w-20 h-14 bg-gray-100 rounded-xl flex items-center justify-center text-[10px] text-gray-400 uppercase font-black">no image</div>
+                                    <div class="w-20 h-14 bg-gray-100 rounded-xl flex items-center justify-center text-[10px] text-gray-400 uppercase font-black">
+                                        no image
+                                    </div>
                                 <?php endif; ?>
                             </td>
                             <td class="p-6">
@@ -357,7 +405,7 @@ if ($conn) {
                                         <i class="fa fa-edit text-sm"></i>
                                     </a>
                                     <a href="?delete_id=<?php echo $row['id']; ?>" 
-                                       onclick="return confirm('⚠️ ยืนยันการลบแพนี้ออกจากระบบ? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
+                                       onclick="return confirm('⚠️️ ยืนยันการลบแพนี้ออกจากระบบ? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
                                        class="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg flex items-center justify-center hover:bg-rose-600 hover:text-white transition shadow-sm" title="ลบ">
                                         <i class="fa fa-trash text-sm"></i>
                                     </a>
@@ -381,10 +429,18 @@ if ($conn) {
                 <div class="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100">
                     <div class="flex gap-4 mb-4">
                         <div class="shrink-0">
-                            <?php if(!empty($row['featured_image'])): ?>
-                                <img src="uploads/<?php echo htmlspecialchars($row['featured_image']); ?>" class="w-24 h-24 object-cover rounded-2xl shadow-md border-2 border-white">
+                            <?php 
+                                $img_src_m = get_raft_image_url($row['featured_image'] ?? ''); 
+                            ?>
+                            <?php if(!empty($img_src_m)): ?>
+                                <img src="<?php echo htmlspecialchars($img_src_m); ?>" 
+                                     alt="<?php echo htmlspecialchars($row['name']); ?>"
+                                     onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'w-24 h-24 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col items-center justify-center text-[10px] text-amber-600 font-bold text-center leading-tight p-2\'><i class=\'fa fa-image text-base mb-1\'></i>รูปไม่พบ</div>';"
+                                     class="w-24 h-24 object-cover rounded-2xl shadow-md border-2 border-white">
                             <?php else: ?>
-                                <div class="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center text-[10px] text-gray-400 font-black uppercase text-center p-2">No Image</div>
+                                <div class="w-24 h-24 bg-gray-100 rounded-2xl flex items-center justify-center text-[10px] text-gray-400 font-black uppercase text-center p-2">
+                                    No Image
+                                </div>
                             <?php endif; ?>
                         </div>
                         <div class="flex-grow flex flex-col justify-center text-left">
