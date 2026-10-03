@@ -12,22 +12,46 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพให้ถูกต้อง ป้องกัน Path ซ้ำซ้อน และรองรับ Base64 / URL ภายนอก
+// 🟢 ปรับโครงสร้างตาราง PostgreSQL อัตโนมัติเพื่อความสมบูรณ์ของระบบ
+if ($conn) {
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS raft_code VARCHAR(50);");
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS price_per_hour NUMERIC(10,2) DEFAULT 0;");
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS is_active INT DEFAULT 1;");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN featured_image TYPE TEXT;");
+    for ($i = 1; $i <= 5; $i++) {
+        @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_{$i} TYPE TEXT;");
+    }
+}
+
+// 🟢 ฟังก์ชันจัดการ URL รูปภาพ (รองรับทั้ง Row ข้อมูล, Base64, URL และ Path ปกติ)
 if (!function_exists('get_raft_image_url')) {
-    function get_raft_image_url($image_path) {
-        if (empty($image_path)) {
-            return '';
+    function get_raft_image_url($input) {
+        $img = '';
+        if (is_array($input)) {
+            if (!empty($input['featured_image'])) {
+                $img = trim($input['featured_image']);
+            } else {
+                for ($i = 1; $i <= 5; $i++) {
+                    if (!empty($input['image_' . $i])) {
+                        $img = trim($input['image_' . $i]);
+                        break;
+                    }
+                }
+            }
+        } else {
+            $img = trim((string)$input);
         }
-        $image_path = trim($image_path);
-        // กรณีเป็น Full URL หรือเป็น Base64
-        if (preg_match('/^(https?:\/\/|data:image\/)/i', $image_path)) {
-            return $image_path;
+
+        if (empty($img)) return '';
+
+        // กรณีเป็น Full URL หรือ Base64
+        if (preg_match('/^(https?:\/\/|data:image\/)/i', $img)) {
+            return $img;
         }
-        // กรณีใน Database มีคำว่า uploads/ อยู่แล้ว
-        if (strpos($image_path, 'uploads/') === 0) {
-            return $image_path;
-        }
-        return 'uploads/' . $image_path;
+
+        // ตัด path uploads/ ที่อาจติดมาข้างหน้าออก
+        $clean_img = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $img), '/');
+        return 'uploads/' . $clean_img;
     }
 }
 
@@ -42,12 +66,12 @@ if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
     exit();
 }
 
-// 3. ระบบลบข้อมูลแพ (ตรวจสอบคอลัมน์อัตโนมัติก่อนเริ่ม Transaction ป้องกัน Transaction Aborted)
+// 3. ระบบลบข้อมูลแพ
 if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
     if ($conn && $delete_id > 0) {
 
-        // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง rafts
+        // ตรวจสอบคอลัมน์ของ rafts
         $r_cols = [];
         $res_rc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'rafts'");
         if ($res_rc) {
@@ -56,7 +80,7 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // ตรวจสอบคอลัมน์ที่มีอยู่จริงในตาราง bookings
+        // ตรวจสอบคอลัมน์ของ bookings
         $b_cols = [];
         $res_bc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
         if ($res_bc) {
@@ -82,16 +106,16 @@ if (isset($_GET['delete_id'])) {
         $chk_r_imgs = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
         $has_r_imgs = ($chk_r_imgs && ($r_tbl = pg_fetch_row($chk_r_imgs)) && !empty($r_tbl[0]));
 
-        // เริ่มต้น Transaction
+        // เริ่ม Transaction
         @pg_query($conn, "BEGIN");
 
-        // 3.1 ลบข้อมูลในตาราง payments ที่ผูกกับการจองของแพนี้
+        // 3.1 ลบข้อมูล payments
         if ($has_pay && in_array('booking_id', $pay_cols)) {
             if (in_array('slip_image', $pay_cols)) {
                 $res_pay_slips = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
                 if ($res_pay_slips) {
                     while ($ps = pg_fetch_assoc($res_pay_slips)) {
-                        $slip_file = "uploads/slips/" . $ps['slip_image'];
+                        $slip_file = __DIR__ . "/uploads/slips/" . $ps['slip_image'];
                         if (!empty($ps['slip_image']) && file_exists($slip_file)) { 
                             @unlink($slip_file); 
                         }
@@ -107,12 +131,12 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.2 ลบรูปสลิปจากตาราง bookings (เฉพาะเมื่อมีคอลัมน์ slip_image)
+        // 3.2 ลบรูปสลิปจากตาราง bookings
         if (in_array('slip_image', $b_cols)) {
             $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
             if ($res_slips) {
                 while ($slip = pg_fetch_assoc($res_slips)) {
-                    $slip_file = "uploads/slips/" . $slip['slip_image'];
+                    $slip_file = __DIR__ . "/uploads/slips/" . $slip['slip_image'];
                     if (!empty($slip['slip_image']) && file_exists($slip_file)) { 
                         @unlink($slip_file); 
                     }
@@ -120,7 +144,7 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.3 ลบรูปภาพจากตาราง rafts (ตรวจสอบว่าไม่มีแพลำอื่นใช้งานอยู่ ก่อนลบไฟล์จริง)
+        // 3.3 ลบรูปภาพจากตาราง rafts (ถ้าไม่มีแพลำอื่นใช้งานอยู่)
         $img_cols_to_select = [];
         if (in_array('featured_image', $r_cols)) $img_cols_to_select[] = 'featured_image';
         for ($i = 1; $i <= 5; $i++) {
@@ -131,7 +155,6 @@ if (isset($_GET['delete_id'])) {
             $res_raft_imgs = @pg_query_params($conn, "SELECT " . implode(", ", $img_cols_to_select) . " FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
                 
-                // คอลัมน์รูปที่มีอยู่จริงในฐานข้อมูลสำหรับนำมาเช็กการใช้งานซ้ำ
                 $all_available_img_cols = array_intersect(
                     ['featured_image', 'image_1', 'image_2', 'image_3', 'image_4', 'image_5'],
                     $r_cols
@@ -140,14 +163,12 @@ if (isset($_GET['delete_id'])) {
                 foreach ($img_cols_to_select as $col) {
                     $img_val = trim($r_img[$col] ?? '');
 
-                    // ข้ามถ้าเป็นค่าว่าง, URL หรือ Base64 (ไม่ต้องสั่ง unlink)
                     if (empty($img_val) || preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
                         continue;
                     }
 
                     $clean_file_name = basename($img_val);
 
-                    // ตรวจสอบว่ายังมีแพลำอื่น (id != $delete_id) ใช้รูปนี้อยู่อีกหรือไม่
                     $where_conds = [];
                     foreach ($all_available_img_cols as $c_name) {
                         $where_conds[] = "{$c_name} = $2 OR {$c_name} = $3 OR {$c_name} = 'uploads/' || $3";
@@ -162,9 +183,8 @@ if (isset($_GET['delete_id'])) {
                         }
                     }
 
-                    // 🟢 ถ้าไม่มีแพลำอื่นใช้รูปนี้แล้ว จึงค่อยลบไฟล์ออกจาก Disk
                     if ($in_use_count === 0) {
-                        $target_img = (strpos($img_val, 'uploads/') === 0) ? $img_val : "uploads/" . $img_val;
+                        $target_img = __DIR__ . '/uploads/' . $clean_file_name;
                         if (file_exists($target_img)) {
                             @unlink($target_img);
                         }
@@ -181,14 +201,13 @@ if (isset($_GET['delete_id'])) {
                     $sub_val = trim($img['image_path'] ?? '');
                     if (!empty($sub_val) && !preg_match('/^(https?:\/\/|data:image\/)/i', $sub_val)) {
                         $sub_clean = basename($sub_val);
-                        // เช็กว่ามีแพลำอื่นใช้รูปนี้ใน raft_images หรือไม่
                         $chk_sub = @pg_query_params($conn, "SELECT COUNT(*) as cnt FROM raft_images WHERE raft_id != $1 AND (image_path = $2 OR image_path = $3)", array($delete_id, $sub_val, $sub_clean));
                         $sub_count = 0;
                         if ($chk_sub && $srow = pg_fetch_assoc($chk_sub)) {
                             $sub_count = intval($srow['cnt']);
                         }
                         if ($sub_count === 0) {
-                            $sub_img = (strpos($sub_val, 'uploads/') === 0) ? $sub_val : "uploads/" . $sub_val;
+                            $sub_img = __DIR__ . '/uploads/' . $sub_clean;
                             if (file_exists($sub_img)) {
                                 @unlink($sub_img);
                             }
@@ -217,30 +236,28 @@ if (isset($_GET['delete_id'])) {
             exit();
         }
 
-        // ทำการยืนยัน Transaction
         @pg_query($conn, "COMMIT");
         header("Location: manage_rafts.php?msg=deleted");
         exit();
     }
 }
 
-// 4. รับค่าคำค้นหา (Search)
+// 4. รับค่าคำค้นหา
 $search_query = "";
 $search_param = "";
 $search_params = [];
 if (isset($_GET['search']) && trim($_GET['search']) !== '') {
     $search_param = trim($_GET['search']);
-    $search_query = " WHERE (r.name ILIKE $1 OR r.raft_code ILIKE $1) ";
+    $search_query = " WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ";
     $search_params[] = '%' . $search_param . '%';
 }
 
-// 5. ระบบแบ่งหน้า (Pagination) หน้าละ 10 รายการ
+// 5. ระบบแบ่งหน้า Pagination
 $limit = 10;
 $page = isset($_GET['page']) && is_numeric($_GET['page']) ? intval($_GET['page']) : 1;
 if ($page < 1) $page = 1;
 $offset = ($page - 1) * $limit;
 
-// นับจำนวนข้อมูลทั้งหมด
 $total_rows = 0;
 if ($conn) {
     $count_sql = "SELECT COUNT(r.id) as total_rows FROM rafts r $search_query";
@@ -251,23 +268,18 @@ if ($conn) {
 }
 $total_pages = ceil($total_rows / $limit);
 
-// 6. ดึงข้อมูลแพ พร้อมแบ่งหน้าเก็บใส่ Array
+// 6. ดึงข้อมูลแพ
 $rafts = [];
 if ($conn) {
+    $base_sql = "SELECT r.*, COALESCE(t.name, t.type_name, 'ประเภท #' || r.raft_type_id) as type_name 
+                 FROM rafts r 
+                 LEFT JOIN raft_types t ON r.raft_type_id = t.id";
+
     if (!empty($search_params)) {
-        $sql = "SELECT r.*, t.name as type_name 
-                FROM rafts r 
-                LEFT JOIN raft_types t ON r.raft_type_id = t.id
-                WHERE (r.name ILIKE $1 OR r.raft_code ILIKE $1)
-                ORDER BY r.id DESC 
-                LIMIT $limit OFFSET $offset";
+        $sql = "$base_sql WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ORDER BY r.id DESC LIMIT $limit OFFSET $offset";
         $result = @pg_query_params($conn, $sql, $search_params);
     } else {
-        $sql = "SELECT r.*, t.name as type_name 
-                FROM rafts r 
-                LEFT JOIN raft_types t ON r.raft_type_id = t.id
-                ORDER BY r.id DESC 
-                LIMIT $limit OFFSET $offset";
+        $sql = "$base_sql ORDER BY r.id DESC LIMIT $limit OFFSET $offset";
         $result = @pg_query($conn, $sql);
     }
 
@@ -305,7 +317,13 @@ if ($conn) {
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
 
     <!-- เรียกใช้ Sidebar -->
-    <?php include 'sidebar.php'; ?>
+    <?php 
+    if (file_exists(__DIR__ . '/sidebar.php')) {
+        include __DIR__ . '/sidebar.php';
+    } elseif (file_exists(__DIR__ . '/../sidebar.php')) {
+        include __DIR__ . '/../sidebar.php';
+    }
+    ?>
 
     <main class="flex-grow flex flex-col min-w-0">
         
@@ -390,9 +408,7 @@ if ($conn) {
                         <?php if (!empty($rafts)): foreach($rafts as $row): ?>
                         <tr class="hover:bg-blue-50/20 transition">
                             <td class="p-6">
-                                <?php 
-                                    $img_src = get_raft_image_url($row['featured_image'] ?? ''); 
-                                ?>
+                                <?php $img_src = get_raft_image_url($row); ?>
                                 <?php if(!empty($img_src)): ?>
                                     <img src="<?php echo htmlspecialchars($img_src); ?>" 
                                          alt="<?php echo htmlspecialchars($row['name']); ?>"
@@ -472,9 +488,7 @@ if ($conn) {
                 <div class="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100">
                     <div class="flex gap-4 mb-4">
                         <div class="shrink-0">
-                            <?php 
-                                $img_src_m = get_raft_image_url($row['featured_image'] ?? ''); 
-                            ?>
+                            <?php $img_src_m = get_raft_image_url($row); ?>
                             <?php if(!empty($img_src_m)): ?>
                                 <img src="<?php echo htmlspecialchars($img_src_m); ?>" 
                                      alt="<?php echo htmlspecialchars($row['name']); ?>"
@@ -537,7 +551,7 @@ if ($conn) {
                 <?php endif; ?>
             </div>
 
-            <!-- ระบบแบ่งหน้า Pagination (UI) -->
+            <!-- ระบบแบ่งหน้า Pagination -->
             <?php if ($total_pages > 1): ?>
             <div class="flex justify-center mt-4 mb-8">
                 <nav class="inline-flex rounded-2xl shadow-sm bg-white overflow-hidden border border-slate-200">
@@ -546,7 +560,7 @@ if ($conn) {
                     ?>
 
                     <?php if ($page > 1): ?>
-                        <a href="?page=<?php echo $page - 1 . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 border-r border-slate-100 transition">
+                        <a href="?page=<?php echo ($page - 1) . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 border-r border-slate-100 transition">
                             <i class="fa fa-chevron-left"></i>
                         </a>
                     <?php else: ?>
@@ -564,7 +578,7 @@ if ($conn) {
                     <?php endfor; ?>
 
                     <?php if ($page < $total_pages): ?>
-                        <a href="?page=<?php echo $page + 1 . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 transition border-l border-slate-100" style="margin-left:-1px;">
+                        <a href="?page=<?php echo ($page + 1) . $q_search; ?>" class="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 transition border-l border-slate-100" style="margin-left:-1px;">
                             <i class="fa fa-chevron-right"></i>
                         </a>
                     <?php else: ?>
