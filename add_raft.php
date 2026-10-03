@@ -14,11 +14,21 @@ if (!isset($_SESSION['user_id'])) {
 
 $error_msg = "";
 
-// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 อัตโนมัติ (ป้องกันรูปหายบน Render 100%)
+// 🟢 ปรับโครงสร้างตาราง PostgreSQL อัตโนมัติเพื่อรองรับ Base64 และคอลัมน์ที่จำเป็น
+if ($conn) {
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN featured_image TYPE TEXT;");
+    for ($i = 1; $i <= 5; $i++) {
+        @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_{$i} TYPE TEXT;");
+    }
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS raft_code VARCHAR(50);");
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS price_per_hour NUMERIC(10,2) DEFAULT 0;");
+    @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS is_active INT DEFAULT 1;");
+}
+
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 อัตโนมัติ
 function convert_image_to_base64($tmp_file, $max_width = 1000) {
     if (!file_exists($tmp_file)) return '';
 
-    // ตรวจสอบข้อมูลรูปภาพ
     $image_info = @getimagesize($tmp_file);
     if ($image_info && function_exists('imagecreatefromstring')) {
         $width  = $image_info[0];
@@ -29,13 +39,11 @@ function convert_image_to_base64($tmp_file, $max_width = 1000) {
         $src_img = @imagecreatefromstring($data);
 
         if ($src_img) {
-            // ย่อขนาดถ้ารูปกว้างเกิน $max_width
             if ($width > $max_width) {
                 $new_width  = $max_width;
                 $new_height = intval($height * ($max_width / $width));
                 $dst_img    = imagecreatetruecolor($new_width, $new_height);
 
-                // รองรับพื้นหลังโปร่งใส (PNG / WEBP)
                 if ($mime === 'image/png' || $mime === 'image/webp') {
                     imagealphablending($dst_img, false);
                     imagesavealpha($dst_img, true);
@@ -48,7 +56,6 @@ function convert_image_to_base64($tmp_file, $max_width = 1000) {
                 $src_img = $dst_img;
             }
 
-            // บีบอัดเป็น JPG คุณภาพ 80% เพื่อให้ไฟล์เบา
             ob_start();
             imagejpeg($src_img, null, 80);
             $compressed_data = ob_get_clean();
@@ -58,13 +65,12 @@ function convert_image_to_base64($tmp_file, $max_width = 1000) {
         }
     }
 
-    // กรณีเซิร์ฟเวอร์ไม่มี GD ให้แปลงตรงๆ
     $raw_data = file_get_contents($tmp_file);
     $mime_type = mime_content_type($tmp_file) ?: 'image/jpeg';
     return 'data:' . $mime_type . ';base64,' . base64_encode($raw_data);
 }
 
-// ดึงรายการประเภทแพสำหรับใส่ Dropdown (PostgreSQL)
+// ดึงรายการประเภทแพสำหรับ Dropdown
 $raft_types = [];
 if ($conn) {
     $res_types = @pg_query($conn, "SELECT * FROM raft_types ORDER BY id ASC");
@@ -84,28 +90,33 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     
     $status        = trim($_POST['status'] ?? 'available');
     $desc          = trim($_POST['description'] ?? '');
-    $image_url_opt = trim($_POST['image_url'] ?? ''); // รองรับการแปะ URL รูปตรงๆ
+    $image_url_opt = trim($_POST['image_url'] ?? '');
 
-    // สร้างรหัสแพอัตโนมัติ
     $raft_code     = 'RAFT-' . date('ym') . rand(100, 999);
 
     if (!empty($name) && $raft_type_id > 0 && $capacity > 0 && $price_day > 0) {
         
         $featured_image = "";
-        $images = ['', '', '', '', '']; // เตรียมพื้นที่สำหรับ image_1 ถึง image_5
+        $images = ['', '', '', '', ''];
         $img_index = 0;
 
-        // 1. ตรวจสอบกรณีผู้ใช้แปะเป็น URL ลิงก์รูปภาพ
+        // โฟลเดอร์สำหรับสำรองไฟล์
+        $target_dir = __DIR__ . '/uploads/';
+        if (!is_dir($target_dir)) {
+            @mkdir($target_dir, 0777, true);
+        }
+
+        // 1. ตรวจสอบกรณีใส่เป็น URL รูปภาพ
         if (!empty($image_url_opt)) {
             $featured_image = $image_url_opt;
             $images[0] = $image_url_opt;
             $img_index = 1;
         }
 
-        // 2. จัดการรูปภาพที่อัปโหลดจากเครื่อง -> แปลงเป็น Base64 เก็บลง DB ถาวร
+        // 2. จัดการรูปภาพที่อัปโหลดจากเครื่อง (แปลงเป็น Base64 พร้อมเซฟลงดิสก์สำรอง)
         if (!empty($_FILES['raft_images']['name'][0])) {
             foreach ($_FILES['raft_images']['name'] as $key => $val) {
-                if ($img_index >= 5) break; // จำกัดสูงสุด 5 รูป
+                if ($img_index >= 5) break;
                 
                 if (isset($_FILES['raft_images']['error'][$key]) && $_FILES['raft_images']['error'][$key] === 0) {
                     $tmp_file = $_FILES["raft_images"]["tmp_name"][$key];
@@ -113,16 +124,22 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     if (!empty($image_base64)) {
                         if (empty($featured_image)) {
-                            $featured_image = $image_base64; // รูปแรกเป็นรูปหลัก
+                            $featured_image = $image_base64;
                         }
                         $images[$img_index] = $image_base64;
+
+                        // เซฟไฟล์จริงลง uploads/ สำรองไว้
+                        $ext = strtolower(pathinfo($_FILES['raft_images']['name'][$key], PATHINFO_EXTENSION)) ?: 'jpg';
+                        $backup_filename = "raft_" . time() . "_{$img_index}." . $ext;
+                        @copy($tmp_file, $target_dir . $backup_filename);
+
                         $img_index++;
                     }
                 }
             }
         }
 
-        // 3. บันทึกข้อมูลลงตาราง rafts (PostgreSQL syntax)
+        // 3. บันทึกข้อมูลลงตาราง rafts
         $sql_insert = "INSERT INTO rafts (
             raft_code, name, raft_type_id, capacity, price_per_day, price_per_hour, 
             description, status, is_active, featured_image, image_1, image_2, image_3, image_4, image_5
@@ -170,7 +187,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden lg:hidden" onclick="toggleSidebar()"></div>
 
     <!-- เรียกใช้ Sidebar -->
-    <?php include 'sidebar.php'; ?>
+    <?php 
+    if (file_exists(__DIR__ . '/sidebar.php')) {
+        include __DIR__ . '/sidebar.php';
+    } elseif (file_exists(__DIR__ . '/../sidebar.php')) {
+        include __DIR__ . '/../sidebar.php';
+    }
+    ?>
 
     <main class="flex-grow flex flex-col min-w-0">
         <header class="bg-white shadow-sm p-4 flex justify-between items-center px-4 md:px-10 sticky top-0 z-30">
