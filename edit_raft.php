@@ -12,7 +12,15 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพ (รองรับ Base64, URL, และ Path เก่า)
+// 🟢 อัปเกรดคอลัมน์รูปภาพเป็น TEXT อัตโนมัติ (ป้องกัน SQL Error เวลาบันทึก Base64)
+if ($conn) {
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN featured_image TYPE TEXT;");
+    for ($i = 1; $i <= 5; $i++) {
+        @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_{$i} TYPE TEXT;");
+    }
+}
+
+// 🟢 ฟังก์ชันจัดการ URL รูปภาพ
 if (!function_exists('get_raft_image_url')) {
     function get_raft_image_url($image_path) {
         if (empty($image_path)) return '';
@@ -27,7 +35,7 @@ if (!function_exists('get_raft_image_url')) {
     }
 }
 
-// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 (ป้องกันรูปหายบน Render 100%)
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64
 function convert_image_to_base64($tmp_file, $max_width = 1000) {
     if (!file_exists($tmp_file)) return '';
 
@@ -93,7 +101,7 @@ if (!$raft) {
     exit(); 
 }
 
-// ดึงรายการประเภทแพสำหรับ Dropdown
+// ดึงรายการประเภทแพ
 $raft_types = [];
 if ($conn) {
     $res_types = @pg_query($conn, "SELECT * FROM raft_types ORDER BY id ASC");
@@ -104,7 +112,7 @@ if ($conn) {
     }
 }
 
-// 3. ระบบลบรูปภาพรายช่อง (image_1 - image_5) อย่างปลอดภัย
+// 3. ระบบลบรูปภาพรายช่อง
 if (isset($_GET['delete_slot'])) {
     $slot = intval($_GET['delete_slot']);
     if ($slot >= 1 && $slot <= 5) {
@@ -112,7 +120,6 @@ if (isset($_GET['delete_slot'])) {
         $img_name = trim($raft[$col_name] ?? '');
 
         if (!empty($img_name)) {
-            // ลบไฟล์จริงเฉพาะกรณีที่เป็นไฟล์บนเครื่อง (ไม่ใช่ Base64 หรือ URL)
             if (!preg_match('/^(https?:\/\/|data:image\/)/i', $img_name)) {
                 $clean_name = basename($img_name);
                 $chk_used = @pg_query_params($conn, "SELECT COUNT(*) as cnt FROM rafts WHERE id != $1 AND (image_1 = $2 OR image_2 = $2 OR image_3 = $2 OR image_4 = $2 OR image_5 = $2 OR featured_image = $2)", array($id, $clean_name));
@@ -123,7 +130,6 @@ if (isset($_GET['delete_slot'])) {
                 }
             }
 
-            // ถ้ารูปที่ลบตรงกับ featured_image ให้เคลียร์หรือหาตัวแทน
             if (($raft['featured_image'] ?? '') === $img_name) {
                 @pg_query_params($conn, "UPDATE rafts SET $col_name = '', featured_image = '' WHERE id = $1", array($id));
             } else {
@@ -135,7 +141,7 @@ if (isset($_GET['delete_slot'])) {
     exit();
 }
 
-// 4. ระบบตั้งรูปช่องนั้นๆ เป็นรูปหลัก (Featured Image)
+// 4. ตั้งรูปหลัก (Featured Image)
 if (isset($_GET['set_featured_slot'])) {
     $slot = intval($_GET['set_featured_slot']);
     if ($slot >= 1 && $slot <= 5) {
@@ -150,7 +156,7 @@ if (isset($_GET['set_featured_slot'])) {
     exit();
 }
 
-// 5. บันทึกการแก้ไขข้อมูลและอัปโหลดรูปภาพใหม่
+// 5. บันทึกข้อมูลและอัปโหลดรูป
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $raft_id        = intval($_POST['raft_id'] ?? 0);
     $name           = trim($_POST['name'] ?? '');
@@ -161,8 +167,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $description    = trim($_POST['description'] ?? '');
     $status         = $_POST['status'] ?? 'available';
 
-    // วนลูปจัดการไฟล์รูปภาพ 5 ช่อง (image_1 - image_5) แปลงเป็น Base64 ทั้งหมด
+    // จัดการอัปโหลดไฟล์รูป 5 ช่อง
     $image_updates = [];
+    $target_dir = __DIR__ . '/uploads/';
+    if (!is_dir($target_dir)) {
+        @mkdir($target_dir, 0777, true);
+    }
+
     for ($i = 1; $i <= 5; $i++) {
         $input_name = "image_" . $i;
         if (isset($_FILES[$input_name]) && $_FILES[$input_name]['error'] === 0) {
@@ -171,6 +182,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             if (!empty($image_base64)) {
                 $image_updates[$input_name] = $image_base64;
+                
+                // เซฟไฟล์ลงดิสก์สำรองไว้ด้วย
+                $file_ext = strtolower(pathinfo($_FILES[$input_name]["name"], PATHINFO_EXTENSION)) ?: 'jpg';
+                $new_file_name = "raft_{$raft_id}_{$i}_" . time() . ".{$file_ext}";
+                @copy($tmp_file, $target_dir . $new_file_name);
             }
         }
     }
@@ -179,22 +195,26 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $sql_update = "UPDATE rafts SET name=$1, raft_type_id=$2, capacity=$3, price_per_day=$4, price_per_hour=$5, description=$6, status=$7 WHERE id=$8";
     @pg_query_params($conn, $sql_update, array($name, $raft_type_id, $capacity, $price_per_day, $price_per_hour, $description, $status, $raft_id));
 
-    // อัปเดตรูปภาพที่เลือกใหม่ลงคอลัมน์ image_1 - image_5
+    // อัปเดตรูปภาพที่เลือกใหม่
     foreach ($image_updates as $col => $base64_data) {
         if (preg_match('/^image_[1-5]$/', $col)) {
             @pg_query_params($conn, "UPDATE rafts SET $col = $1 WHERE id = $2", array($base64_data, $raft_id));
         }
     }
 
-    // ตรวจสอบรูปหลัก หากยังไม่มี ให้ดึงรูปแรกที่มีอยู่ตั้งเป็นรูปหลักอัตโนมัติ
-    $res_check = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1", array($raft_id));
-    $check_raft = ($res_check) ? pg_fetch_assoc($res_check) : [];
-    if (empty($check_raft['featured_image'])) {
-        for ($i = 1; $i <= 5; $i++) {
-            if (!empty($check_raft['image_' . $i])) {
-                $first_img = $check_raft['image_' . $i];
-                @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($first_img, $raft_id));
-                break;
+    // ซิงค์รูปหลัก (Featured Image) อัตโนมัติ: ถ้ามีการเปลี่ยนรูปที่ 1 ให้เปลี่ยนรูปหลักตามทันที
+    if (isset($image_updates['image_1'])) {
+        @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($image_updates['image_1'], $raft_id));
+    } else {
+        // หากรูปหลักว่างอยู่ ให้หารูปแรกที่มีมาใส่
+        $res_check = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1", array($raft_id));
+        $check_raft = ($res_check) ? pg_fetch_assoc($res_check) : [];
+        if (empty($check_raft['featured_image'])) {
+            for ($i = 1; $i <= 5; $i++) {
+                if (!empty($check_raft['image_' . $i])) {
+                    @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($check_raft['image_' . $i], $raft_id));
+                    break;
+                }
             }
         }
     }
@@ -219,11 +239,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 </head>
 <body class="bg-slate-50 flex min-h-screen">
 
-    <!-- Mobile Sidebar Overlay -->
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
 
     <!-- เรียกใช้งาน Sidebar -->
-    <?php include 'sidebar.php'; ?>
+    <?php 
+    if (file_exists(__DIR__ . '/sidebar.php')) {
+        include __DIR__ . '/sidebar.php';
+    } elseif (file_exists(__DIR__ . '/../sidebar.php')) {
+        include __DIR__ . '/../sidebar.php';
+    }
+    ?>
 
     <main class="flex-grow flex flex-col min-w-0">
         <header class="bg-white shadow-sm p-4 flex justify-between items-center px-4 md:px-10 sticky top-0 z-30">
