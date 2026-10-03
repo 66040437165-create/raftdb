@@ -1,9 +1,7 @@
 <?php
 session_start();
 require_once __DIR__ . '/db_config.php';
-<button onclick="window.history.back()" class="inline-flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition">
-    <i class="fa fa-arrow-left"></i> ย้อนกลับ
-</button>
+
 // ตรวจสอบสิทธิ์ผู้ดูแลระบบ (Admin Check)
 $is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || 
             (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1);
