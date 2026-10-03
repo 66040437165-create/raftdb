@@ -53,6 +53,23 @@ if (!$conn) {
     @pg_query($conn, "UPDATE bookings 
                       SET check_in_date = check_in::date 
                       WHERE check_in_date IS NULL AND check_in IS NOT NULL");
+
+    // 🟢 6. ปรับคอลัมน์รูปภาพในตาราง rafts ให้เป็น TEXT รองรับรูป Base64 และลิงก์ URL ไม่จำกัดความยาว
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN featured_image TYPE TEXT");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_1 TYPE TEXT");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_2 TYPE TEXT");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_3 TYPE TEXT");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_4 TYPE TEXT");
+    @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_5 TYPE TEXT");
+
+    // 🟢 7. กู้คืนรูปแพเดิมที่เคยเพิ่มไปก่อนหน้านี้แล้วรูปแตก (เปลี่ยนเป็นรูปเริ่มต้นให้อัตโนมัติทันที)
+    $default_raft_img = 'https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';
+    @pg_query($conn, "UPDATE rafts 
+                      SET featured_image = '{$default_raft_img}' 
+                      WHERE (featured_image IS NOT NULL AND featured_image != '' 
+                             AND featured_image NOT LIKE 'http%' 
+                             AND featured_image NOT LIKE 'data:%')
+                         OR featured_image IS NULL");
 }
 
 // --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
