@@ -62,14 +62,19 @@ if (!$conn) {
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_4 TYPE TEXT");
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_5 TYPE TEXT");
 
-    // 🟢 7. กู้คืนรูปแพเดิมที่เคยเพิ่มไปก่อนหน้านี้แล้วรูปแตก (เปลี่ยนเป็นรูปเริ่มต้นให้อัตโนมัติทันที)
-    $default_raft_img = 'https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';
+    // 🟢 7. ดึงรูปแพของจริงจากลำที่มีรูปอยู่แล้ว (แพ 10, 12, 13) มาใส่แทนรูปวัดและรูปที่หายไปทั้งหมด
     @pg_query($conn, "UPDATE rafts 
-                      SET featured_image = '{$default_raft_img}' 
-                      WHERE (featured_image IS NOT NULL AND featured_image != '' 
-                             AND featured_image NOT LIKE 'http%' 
-                             AND featured_image NOT LIKE 'data:%')
-                         OR featured_image IS NULL");
+                      SET featured_image = (
+                          SELECT featured_image FROM rafts 
+                          WHERE (name LIKE '%แพ 13%' OR name LIKE '%แพ 12%' OR name LIKE '%แพ 10%')
+                            AND featured_image IS NOT NULL 
+                            AND featured_image != '' 
+                            AND featured_image NOT LIKE '%unsplash%'
+                          LIMIT 1
+                      ) 
+                      WHERE featured_image LIKE '%unsplash%' 
+                         OR featured_image IS NULL 
+                         OR featured_image = ''");
 }
 
 // --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
