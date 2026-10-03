@@ -75,8 +75,11 @@ $check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($bo
 $total_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
 $slip_img = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
 
-// สถานะการจอง (รองรับทั้ง status_id = 2 หรือ status = 'confirmed')
+// สถานะการจอง
 $is_confirmed = (isset($booking['status_id']) && (int)$booking['status_id'] === 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
+
+// ตรวจสอบว่าผู้ใช้เชื่อมต่อ LINE อยู่หรือไม่
+$has_line = !empty($_SESSION['line_user_id']) || !empty($_SESSION['user_line_id']) || !empty($booking['line_user_id']);
 
 // ฟังก์ชันแปลงวันที่เป็นภาษาไทย
 function thai_date_short($date_str) {
@@ -92,24 +95,7 @@ function thai_date_short($date_str) {
     return "$d $m $y";
 }
 
-// -------------------------------------------------------------------------
-// จัดเตรียมข้อความรายละเอียดเพื่อส่งเข้า LINE ร้านค้า (@906kkkfr)
 $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('แพ #' . ($booking['raft_id'] ?? ''));
-$line_text = "สวัสดีครับ ขอแจ้งรายละเอียดการจองแพครับ 🛶\n";
-$line_text .= "━━━━━━━━━━━━━━━━\n";
-$line_text .= "📋 รหัสการจอง: {$booking_code}\n";
-$line_text .= "👤 ชื่อผู้จอง: {$guest_name}\n";
-$line_text .= "📞 เบอร์โทร: {$guest_tel}\n";
-$line_text .= "⛵ แพที่จอง: {$raft_display_name}\n";
-$line_text .= "📅 วันที่เข้าพัก: " . thai_date_short($check_in_date) . " ({$check_in_time} น.)\n";
-$line_text .= "💰 ยอดรวมทั้งสิ้น: ฿" . number_format($total_price, 2) . "\n";
-$line_text .= "━━━━━━━━━━━━━━━━\n";
-$line_text .= "✨ รบกวนตรวจสอบและยืนยันการจองด้วยครับ";
-
-$line_oa_id = "@906kkkfr"; 
-$encoded_line_text = urlencode($line_text);
-$line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_text}";
-// -------------------------------------------------------------------------
 ?>
 <!DOCTYPE html>
 <html lang="th">
@@ -125,13 +111,26 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
 <body class="bg-slate-50 min-h-screen py-10 px-4">
 
     <div class="max-w-3xl mx-auto">
-        <div class="text-center mb-10">
+        <div class="text-center mb-8">
             <div class="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm animate-bounce">
                 <i class="fa fa-check text-4xl text-emerald-500"></i>
             </div>
             <h1 class="text-3xl font-black text-gray-800">ส่งคำขอจองสำเร็จ!</h1>
             <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพหนองกวากกับเรา</p>
         </div>
+
+        <!-- 🟢 กล่องแจ้งเตือนสถานะการส่งข้อความเข้า LINE ลูกค้าอัตโนมัติ -->
+        <?php if ($has_line): ?>
+            <div class="mb-6 p-4 bg-emerald-50 border-2 border-emerald-300 rounded-3xl flex items-center gap-4 shadow-sm">
+                <div class="w-12 h-12 bg-[#06C755] text-white rounded-2xl flex items-center justify-center shrink-0 text-2xl shadow-md shadow-emerald-200">
+                    <i class="fab fa-line"></i>
+                </div>
+                <div>
+                    <h4 class="font-black text-emerald-900 text-sm md:text-base">ส่งใบยืนยันการจองเข้า LINE ของคุณเรียบร้อยแล้ว!</h4>
+                    <p class="text-xs text-emerald-700 mt-0.5">ระบบได้ส่งรหัสการจอง ยอดชำระ และเลขบัญชีเข้าแชท LINE ของคุณโดยอัตโนมัติ สามารถเปิดดูได้ทันที</p>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <div class="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-gray-100">
             <!-- Header ส่วนแสดงรหัสจอง -->
@@ -256,7 +255,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     <p class="font-black text-gray-700">012-3-45678-9</p>
                                 </div>
                             </div>
-                            <button onclick="navigator.clipboard.writeText('012-3-45678-9')" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
+                            <button type="button" onclick="navigator.clipboard.writeText('012-3-45678-9'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
                         </div>
 
                         <div class="bg-purple-50 p-4 rounded-2xl border border-purple-100 flex items-center justify-between">
@@ -267,7 +266,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     <p class="font-black text-gray-700">987-6-54321-0</p>
                                 </div>
                             </div>
-                            <button onclick="navigator.clipboard.writeText('987-6-54321-0')" class="text-gray-400 hover:text-purple-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
+                            <button type="button" onclick="navigator.clipboard.writeText('987-6-54321-0'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-purple-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
                         </div>
                     </div>
 
@@ -316,8 +315,9 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
 
                         <!-- เมนูตัวเลือกด้านล่าง -->
                         <div class="flex flex-col gap-3">
-                            <a href="<?php echo $line_redirect_url; ?>" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
-                                <i class="fab fa-line text-2xl"></i> ส่งรายละเอียดและแจ้งโอนเงินผ่าน LINE
+                            <!-- ลิงก์ติดต่อสอบถามทั่วไป ไม่มีการบังคับใส่ข้อความให้ลูกค้ากดส่งเอง -->
+                            <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
+                                <i class="fab fa-line text-2xl"></i> ติดต่อสอบถามเพิ่มเติมผ่าน LINE (@906kkkfr)
                             </a>
                             
                             <a href="index.php" class="bg-gray-100 text-gray-600 w-full py-4 rounded-2xl font-bold text-center hover:bg-gray-200 transition">
