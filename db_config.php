@@ -22,18 +22,37 @@ if ($database_url) {
 if (!$conn) {
     $conn = null; 
 } else {
-    // ตั้งค่าไทม์โซนและตารางพื้นฐานถ้าเชื่อมต่อสำเร็จ
+    // 1. ตั้งค่าไทม์โซนประเทศไทย
     @pg_query($conn, "SET timezone = 'Asia/Bangkok'");
     
+    // 2. สร้างตาราง settings พื้นฐาน
     @pg_query($conn, "CREATE TABLE IF NOT EXISTS settings (
         setting_key VARCHAR(50) PRIMARY KEY,
         setting_value TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
 
-    // 🟢 ปลดล็อกสถานะแพที่เผลอติด 'pending' จากโค้ดเดิม ให้กลับมาเป็น 'available' ทันที
-    // เพื่อให้แพที่จองล่วงหน้า ยังคงแสดงให้ลูกค้าคนอื่นเลือกจองในวันอื่นๆ ได้ตามปกติ
-    @pg_query($conn, "UPDATE rafts SET status = 'available' WHERE status = 'pending'");
+    // 🟢 3. ปลดล็อกสถานะแพทุกลำให้พร้อมให้บริการ (รองรับตัวพิมพ์เล็ก-ใหญ่และช่องว่าง)
+    @pg_query($conn, "UPDATE rafts SET status = 'available' WHERE status IS NULL OR LOWER(TRIM(status)) = 'pending'");
+
+    // 🟢 4. ตรวจสอบและเพิ่มคอลัมน์วันที่ที่จำเป็นในตาราง bookings ป้องกันการบันทึกตกหล่น
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in_date DATE");
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in_time VARCHAR(20)");
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_out_date DATE");
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_out_time VARCHAR(20)");
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in TIMESTAMP");
+    @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_out TIMESTAMP");
+
+    // 🟢 5. แก้ไขข้อมูลการจองเดิมที่บันทึกวันผิด (ซิงค์ check_in ให้ตรงกับ check_in_date ที่ลูกค้าเลือกจริง)
+    @pg_query($conn, "UPDATE bookings 
+                      SET check_in = (check_in_date || ' ' || COALESCE(check_in_time, '09:00'))::timestamp 
+                      WHERE check_in_date IS NOT NULL 
+                        AND check_in IS NOT NULL 
+                        AND check_in::date != check_in_date");
+
+    @pg_query($conn, "UPDATE bookings 
+                      SET check_in_date = check_in::date 
+                      WHERE check_in_date IS NULL AND check_in IS NOT NULL");
 }
 
 // --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
@@ -51,7 +70,6 @@ if (file_exists(__DIR__ . '/line_helper.php')) {
 // Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar และ Header)
 $pending_bookings_count = 0;
 if ($conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION["role"]) && strtolower($_SESSION["role"]) === "admin") {
-    // รองรับทั้ง status = 'pending' และ status_id = 1
     $res_p = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending' OR status_id = 1");
     if ($res_p) {
         $row_p = pg_fetch_assoc($res_p);
