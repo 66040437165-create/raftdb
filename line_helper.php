@@ -1,11 +1,11 @@
 <?php
 // กำหนดค่าการเชื่อมต่อ LINE Messaging API
-define('LINE_CHANNEL_ACCESS_TOKEN', 'ใส่_CHANNEL_ACCESS_TOKEN_ตรงนี้');
-define('LINE_ADMIN_USER_ID', 'ใส่_YOUR_USER_ID_ตรงนี้');
+define('LINE_CHANNEL_ACCESS_TOKEN', 'jStaztWHf7QXNoCVTPhoqat7sCmK5HZp5GBJXrlUv+c9NMT26dzuAbalCnpxp53VSGoGBIU16cV5CSfyuKq4qpqbBv+Xd8ju3CTw3/sHfa3PpcS2RwYykgN3CqcJye6QEqexCW+w0MD8B9tF5w+FxAdB04t89/1O/w1cDnyilFU=');
+define('LINE_ADMIN_USER_ID', 'Uc363e24c7774830ce61b1995d0b11e9d');
 
 /**
  * ฟังก์ชันส่งข้อความตัวอักษรเข้า LINE (Push Message)
- * @param string $to_user_id รหัส LINE ของผู้รับ (เช่น LINE_ADMIN_USER_ID หรือ line_user_id ของลูกค้า)
+ * @param string $to_user_id รหัส LINE ของผู้รับ
  * @param string $message ข้อความที่ต้องการส่ง
  * @return array ผลลัพธ์การส่ง
  */
