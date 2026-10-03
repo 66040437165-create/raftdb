@@ -121,7 +121,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
 
         if (!empty($b_updates)) {
             $b_params[] = $booking_id;
-            // เช็คเงื่อนไข Primary Key ว่าเป็น id หรือ booking_id
             $pk_col = in_array('booking_id', $b_cols) && !in_array('id', $b_cols) ? 'booking_id' : 'id';
             $sql_up_b = "UPDATE bookings SET " . implode(", ", $b_updates) . " WHERE $pk_col = $" . $b_idx;
             @pg_query_params($conn, $sql_up_b, $b_params);
@@ -146,17 +145,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         $line_msg .= "━━━━━━━━━━━━━━━━\n";
         $line_msg .= "⚠️ รูปสลิปหลักฐานการโอนด้านล่างนี้ 👇";
 
-        // สร้าง Public URL ของรูปสลิปสำหรับส่งให้ LINE Bot ดึงภาพ
+        // สร้าง Public URL ของรูปสลิป
         $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
         $host = $_SERVER['HTTP_HOST'];
         $base_dir = rtrim(dirname($_SERVER['PHP_SELF']), '/\\');
         $slip_public_url = "$protocol://$host" . ($base_dir ? $base_dir : '') . "/uploads/slips/" . $new_filename;
 
-        // ส่งผ่าน LINE Messaging API (Push Message)
-        $line_access_token = 'YOUR_LINE_CHANNEL_ACCESS_TOKEN'; // 🔑 ใส่ Channel Access Token ของบอทร้าน
-        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID';             // 🔑 ใส่ User ID หรือ Group ID ของแอดมิน
+        // 🔑 ใส่ Token ที่ท่านให้มาเรียบร้อยแล้ว
+        $line_access_token = 'jStaztWHf7QXNoCVTPhoqat7sCmK5HZp5GBJXrlUv+c9NMT26dzuAbalCnpxp53VSGoGBIU16cV5CSfyuKq4qpqbBv+Xd8ju3CTw3/sHfa3PpcS2RwYykgN3CqcJye6QEqexCW+w0MD8B9tF5w+FxAdB04t89/1O/w1cDnyilFU='; 
+        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID'; // ⚠️ อย่าลืมใส่ User ID หรือ Group ID ของแอดมินตรงนี้
 
-        if (!empty($line_access_token) && $line_access_token !== 'YOUR_LINE_CHANNEL_ACCESS_TOKEN') {
+        if (!empty($line_access_token)) {
             $push_data = [
                 'to' => $line_to_id,
                 'messages' => [
@@ -182,11 +181,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
             ]);
             @curl_exec($ch);
             @curl_close($ch);
-        }
-
-        // เผื่อมีฟังก์ชัน send_line_message เดิมที่ใช้ร่วมกัน
-        if (function_exists('send_line_message') && empty($line_access_token)) {
-            @send_line_message($line_msg);
         }
         
         echo "<script>
