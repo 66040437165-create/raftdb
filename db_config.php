@@ -30,6 +30,10 @@ if (!$conn) {
         setting_value TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
+
+    // 🟢 ปลดล็อกสถานะแพที่เผลอติด 'pending' จากโค้ดเดิม ให้กลับมาเป็น 'available' ทันที
+    // เพื่อให้แพที่จองล่วงหน้า ยังคงแสดงให้ลูกค้าคนอื่นเลือกจองในวันอื่นๆ ได้ตามปกติ
+    @pg_query($conn, "UPDATE rafts SET status = 'available' WHERE status = 'pending'");
 }
 
 // --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
@@ -44,14 +48,15 @@ if (file_exists(__DIR__ . '/line_helper.php')) {
     require_once __DIR__ . '/../line_helper.php';
 }
 
-// Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar)
+// Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar และ Header)
 $pending_bookings_count = 0;
-if ($conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION["role"]) && $_SESSION["role"] === "admin") {
-    $res_p = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending'");
+if ($conn && session_status() === PHP_SESSION_ACTIVE && isset($_SESSION["role"]) && strtolower($_SESSION["role"]) === "admin") {
+    // รองรับทั้ง status = 'pending' และ status_id = 1
+    $res_p = @pg_query($conn, "SELECT COUNT(*) as cnt FROM bookings WHERE status = 'pending' OR status_id = 1");
     if ($res_p) {
         $row_p = pg_fetch_assoc($res_p);
         if ($row_p) {
-            $pending_bookings_count = $row_p["cnt"];
+            $pending_bookings_count = intval($row_p["cnt"]);
         }
     }
 }
