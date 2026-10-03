@@ -222,7 +222,7 @@ $total_rafts_count = count($rafts);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ปฏิทินตารางการจองแพ - ล่องแพหนองกวาก</title>
+    <title>ปฏิทินตารางการจองแพหนองกวาก</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700;800&display=swap" rel="stylesheet">
@@ -311,10 +311,10 @@ $total_rafts_count = count($rafts);
     <nav class="bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-100 sticky top-0 z-40">
         <div class="container mx-auto px-4 md:px-8 py-3.5 flex justify-between items-center">
             <a href="index.php" class="text-xl md:text-2xl font-black text-blue-600 flex items-center gap-2.5">
-                <span class="text-2xl md:text-3xl">🌊</span>
+                <span class="text-2xl md:text-3xl"></span>
                 <div>
                     <span class="block leading-tight font-extrabold text-blue-600">ล่องแพหนองกวาก</span>
-                    <span class="text-[10px] text-gray-400 font-medium block uppercase tracking-widest">ChillRaft NongKwak</span>
+                    <span class="text-[10px] text-gray-400 font-medium block uppercase tracking-widest"></span>
                 </div>
             </a>
 
@@ -606,7 +606,7 @@ $total_rafts_count = count($rafts);
     <footer class="bg-slate-900 text-slate-400 py-8 border-t border-slate-800 mt-12 text-center text-xs">
         <div class="container mx-auto px-4">
             <p class="font-medium text-slate-300">ล่องแพหนองกวาก</p>
-            <p class="mt-1 text-slate-500">© <?php echo date('Y'); ?> ChillRaft. All rights reserved.</p>
+            <p class="mt-1 text-slate-500">© <?php echo date('Y'); ?> ChillRaft. All rights reserv</p>
         </div>
     </footer>
 
