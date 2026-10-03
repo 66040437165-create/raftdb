@@ -12,15 +12,15 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพให้ถูกต้อง ป้องกัน Path ซ้ำซ้อน (เช่น uploads/uploads/...)
+// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพให้ถูกต้อง ป้องกัน Path ซ้ำซ้อน และรองรับ Base64 / URL ภายนอก
 if (!function_exists('get_raft_image_url')) {
     function get_raft_image_url($image_path) {
         if (empty($image_path)) {
             return '';
         }
         $image_path = trim($image_path);
-        // กรณีเป็น Full URL (เช่น อัปโหลดไว้บน Cloudinary หรือโฮสต์ภายนอก)
-        if (preg_match('/^https?:\/\//i', $image_path)) {
+        // กรณีเป็น Full URL หรือเป็น Base64
+        if (preg_match('/^(https?:\/\/|data:image\/)/i', $image_path)) {
             return $image_path;
         }
         // กรณีใน Database มีคำว่า uploads/ อยู่แล้ว
@@ -120,18 +120,51 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.3 ลบรูปภาพจากตาราง rafts (ดึงเฉพาะคอลัมน์ที่มีอยู่จริง)
+        // 3.3 ลบรูปภาพจากตาราง rafts (ตรวจสอบว่าไม่มีแพลำอื่นใช้งานอยู่ ก่อนลบไฟล์จริง)
         $img_cols_to_select = [];
         if (in_array('featured_image', $r_cols)) $img_cols_to_select[] = 'featured_image';
         for ($i = 1; $i <= 5; $i++) {
             if (in_array("image_$i", $r_cols)) $img_cols_to_select[] = "image_$i";
         }
+
         if (!empty($img_cols_to_select)) {
             $res_raft_imgs = @pg_query_params($conn, "SELECT " . implode(", ", $img_cols_to_select) . " FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
+                
+                // คอลัมน์รูปที่มีอยู่จริงในฐานข้อมูลสำหรับนำมาเช็กการใช้งานซ้ำ
+                $all_available_img_cols = array_intersect(
+                    ['featured_image', 'image_1', 'image_2', 'image_3', 'image_4', 'image_5'],
+                    $r_cols
+                );
+
                 foreach ($img_cols_to_select as $col) {
-                    if (!empty($r_img[$col])) {
-                        $target_img = (strpos($r_img[$col], 'uploads/') === 0) ? $r_img[$col] : "uploads/" . $r_img[$col];
+                    $img_val = trim($r_img[$col] ?? '');
+
+                    // ข้ามถ้าเป็นค่าว่าง, URL หรือ Base64 (ไม่ต้องสั่ง unlink)
+                    if (empty($img_val) || preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
+                        continue;
+                    }
+
+                    $clean_file_name = basename($img_val);
+
+                    // ตรวจสอบว่ายังมีแพลำอื่น (id != $delete_id) ใช้รูปนี้อยู่อีกหรือไม่
+                    $where_conds = [];
+                    foreach ($all_available_img_cols as $c_name) {
+                        $where_conds[] = "{$c_name} = $2 OR {$c_name} = $3 OR {$c_name} = 'uploads/' || $3";
+                    }
+
+                    $in_use_count = 0;
+                    if (!empty($where_conds)) {
+                        $chk_sql = "SELECT COUNT(*) as cnt FROM rafts WHERE id != $1 AND (" . implode(" OR ", $where_conds) . ")";
+                        $chk_res = @pg_query_params($conn, $chk_sql, array($delete_id, $img_val, $clean_file_name));
+                        if ($chk_res && $chk_row = pg_fetch_assoc($chk_res)) {
+                            $in_use_count = intval($chk_row['cnt']);
+                        }
+                    }
+
+                    // 🟢 ถ้าไม่มีแพลำอื่นใช้รูปนี้แล้ว จึงค่อยลบไฟล์ออกจาก Disk
+                    if ($in_use_count === 0) {
+                        $target_img = (strpos($img_val, 'uploads/') === 0) ? $img_val : "uploads/" . $img_val;
                         if (file_exists($target_img)) {
                             @unlink($target_img);
                         }
@@ -145,10 +178,20 @@ if (isset($_GET['delete_id'])) {
             $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
             if ($res_imgs) {
                 while ($img = pg_fetch_assoc($res_imgs)) {
-                    if (!empty($img['image_path'])) {
-                        $sub_img = (strpos($img['image_path'], 'uploads/') === 0) ? $img['image_path'] : "uploads/" . $img['image_path'];
-                        if (file_exists($sub_img)) {
-                            @unlink($sub_img);
+                    $sub_val = trim($img['image_path'] ?? '');
+                    if (!empty($sub_val) && !preg_match('/^(https?:\/\/|data:image\/)/i', $sub_val)) {
+                        $sub_clean = basename($sub_val);
+                        // เช็กว่ามีแพลำอื่นใช้รูปนี้ใน raft_images หรือไม่
+                        $chk_sub = @pg_query_params($conn, "SELECT COUNT(*) as cnt FROM raft_images WHERE raft_id != $1 AND (image_path = $2 OR image_path = $3)", array($delete_id, $sub_val, $sub_clean));
+                        $sub_count = 0;
+                        if ($chk_sub && $srow = pg_fetch_assoc($chk_sub)) {
+                            $sub_count = intval($srow['cnt']);
+                        }
+                        if ($sub_count === 0) {
+                            $sub_img = (strpos($sub_val, 'uploads/') === 0) ? $sub_val : "uploads/" . $sub_val;
+                            if (file_exists($sub_img)) {
+                                @unlink($sub_img);
+                            }
                         }
                     }
                 }
@@ -405,7 +448,7 @@ if ($conn) {
                                         <i class="fa fa-edit text-sm"></i>
                                     </a>
                                     <a href="?delete_id=<?php echo $row['id']; ?>" 
-                                       onclick="return confirm('⚠️️ ยืนยันการลบแพนี้ออกจากระบบ? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
+                                       onclick="return confirm('⚠️ ยืนยันการลบแพนี้ออกจากระบบ? (รายการจองที่ผูกกับแพนี้จะถูกลบออกด้วย)')" 
                                        class="bg-rose-50 text-rose-600 w-9 h-9 rounded-lg flex items-center justify-center hover:bg-rose-600 hover:text-white transition shadow-sm" title="ลบ">
                                         <i class="fa fa-trash text-sm"></i>
                                     </a>
