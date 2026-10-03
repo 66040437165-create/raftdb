@@ -7,19 +7,21 @@ $settings = [];
 if ($conn) {
     $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings");
     if ($res_settings) {
-        while ($row = pg_fetch_assoc($res_settings)) {$settings[$row['setting_key']] =$row['setting_value'];
+        while ($row = pg_fetch_assoc($res_settings)) {
+            $settings[$row['setting_key']] = $row['setting_value'];
         }
     }
 }
-$open_time  =$settings['open_time'] ?? '09:00';
-$close_time =$settings['close_time'] ?? '17:30';
+$open_time  = $settings['open_time'] ?? '09:00';
+$close_time = $settings['close_time'] ?? '17:30';
 
 // 2. รับค่าค้นหาจากฟอร์ม
-$checkin          = isset($_GET['checkin']) && !empty($_GET['checkin']) ?$_GET['checkin'] : date('Y-m-d');
-$checkin_time     = isset($_GET['checkin_time']) ? $_GET['checkin_time'] :$open_time;
-$checkout         = date('Y-m-d', strtotime($checkin . ' +1 day'));
-$checkout_time    = '11:00';$guests           = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
-$search_keyword   = isset($_GET['search']) ? trim($_GET['search']) : '';
+$checkin         = isset($_GET['checkin']) && !empty($_GET['checkin']) ? $_GET['checkin'] : date('Y-m-d');
+$checkin_time    = isset($_GET['checkin_time']) ? $_GET['checkin_time'] : $open_time;
+$checkout        = date('Y-m-d', strtotime($checkin . ' +1 day'));
+$checkout_time   = '11:00';
+$guests          = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
+$search_keyword  = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // 3. ดึงข้อมูลแพว่างจากตาราง rafts (PostgreSQL แบบตรวจจับโครงสร้างตารางอัตโนมัติ)
 $rafts = [];
@@ -42,35 +44,43 @@ if ($conn) {
         }
     }
 
-    $params = [];$p_idx = 1;
+    $params = [];
+    $p_idx = 1;
 
-    // เงื่อนไขสถานะของแพ (รองรับทั้ง available, ว่าง, 1, หรือค่าว่าง)
+    // เงื่อนไขสถานะของแพ
     $where_clauses = [
         "(r.status IS NULL OR TRIM(LOWER(r.status)) IN ('available', 'ว่าง', 'ready', 'active', '1', ''))"
     ];
 
-    if (in_array('is_active', $r_cols)) {$where_clauses[] = "(r.is_active = 1 OR r.is_active IS NULL)";
+    if (in_array('is_active', $r_cols)) {
+        $where_clauses[] = "(r.is_active = 1 OR r.is_active IS NULL)";
     }
 
     // กรองตามคำค้นหา
-    if (!empty($search_keyword)) {$search_fields = [];
-        if (in_array('name', $r_cols))$search_fields[] = "r.name ILIKE $" . $p_idx;
-        if (in_array('raft_code', $r_cols))$search_fields[] = "r.raft_code ILIKE $" . $p_idx;
-        if (in_array('description', $r_cols))$search_fields[] = "r.description ILIKE $" . $p_idx;
+    if (!empty($search_keyword)) {
+        $search_fields = [];
+        if (in_array('name', $r_cols)) $search_fields[] = "r.name ILIKE $" . $p_idx;
+        if (in_array('raft_code', $r_cols)) $search_fields[] = "r.raft_code ILIKE $" . $p_idx;
+        if (in_array('description', $r_cols)) $search_fields[] = "r.description ILIKE $" . $p_idx;
         
         if (!empty($search_fields)) {
             $where_clauses[] = "(" . implode(" OR ", $search_fields) . ")";
-            $params[] = '%' . $search_keyword . '\%';$p_idx++;
+            $params[] = '%' . $search_keyword . '%';
+            $p_idx++;
         }
     }
 
-    // ตรวจสอบกับรายการจอง (NOT EXISTS) แบบปลอดภัยตามคอลัมน์ที่มีอยู่จริง
-    if (!empty($b_cols) && in_array('raft_id', $b_cols)) {$date_col = in_array('check_in_date', $b_cols) ? 'b.check_in_date' : (in_array('check_in',$b_cols) ? 'b.check_in' : null);
+    // ตรวจสอบกับรายการจอง (NOT EXISTS)
+    if (!empty($b_cols) && in_array('raft_id', $b_cols)) {
+        $date_col = in_array('check_in_date', $b_cols) ? 'b.check_in_date' : (in_array('check_in', $b_cols) ? 'b.check_in' : null);
 
-        if ($date_col) {$st_filters = [];
-            if (in_array('status_id', $b_cols)) {$st_filters[] = "COALESCE(b.status_id, 0) NOT IN (3, 4)";
+        if ($date_col) {
+            $st_filters = [];
+            if (in_array('status_id', $b_cols)) {
+                $st_filters[] = "COALESCE(b.status_id, 0) NOT IN (3, 4)";
             }
-            if (in_array('status', $b_cols)) {$st_filters[] = "LOWER(COALESCE(b.status, '')) NOT IN ('cancelled', 'rejected', 'cancel')";
+            if (in_array('status', $b_cols)) {
+                $st_filters[] = "LOWER(COALESCE(b.status, '')) NOT IN ('cancelled', 'rejected', 'cancel')";
             }
             $st_sql = !empty($st_filters) ? " AND (" . implode(" AND ", $st_filters) . ")" : "";
 
@@ -80,22 +90,23 @@ if ($conn) {
                   AND $date_col::date = $" . $p_idx . "::date
                   $st_sql
             )";
-            $params[] =$checkin;
+            $params[] = $checkin;
             $p_idx++;
         }
     }
 
     $sql = "SELECT r.* FROM rafts r WHERE " . implode(" AND ", $where_clauses) . " ORDER BY r.id DESC";
-    $result = !empty($params) ? @pg_query_params($conn, $sql,$params) : @pg_query($conn,$sql);
+    $result = !empty($params) ? @pg_query_params($conn, $sql, $params) : @pg_query($conn, $sql);
 
-    // ระบบสำรอง (Fallback): หาก Query หลักติดปัญหา ให้ดึงแพที่มีสถานะว่างขึ้นมาทันที
-    if (!$result || pg_num_rows($result) === 0) {$fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) IN ('available', 'ว่าง', 'ready', 'active', '1', '')) ORDER BY id DESC";
-        $result = @pg_query($conn,$fallback_sql);
+    // ระบบสำรอง (Fallback)
+    if (!$result || pg_num_rows($result) === 0) {
+        $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) IN ('available', 'ว่าง', 'ready', 'active', '1', '')) ORDER BY id DESC";
+        $result = @pg_query($conn, $fallback_sql);
     }
 
     if ($result) {
         while ($row = pg_fetch_assoc($result)) {
-            $rafts[] =$row;
+            $rafts[] = $row;
         }
     }
 }
@@ -105,7 +116,7 @@ if ($conn) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ChillRaft - สัมผัสธรรมชาติเหนือผืนน้ำ</title>
+    <title>ChillRaft - สัมผัสธรรมชาติเหนือผืนน้ำ ล่องแพหนองกวาก</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
@@ -127,19 +138,25 @@ if ($conn) {
         .btn-animate:active { transform: scale(0.95); }
     </style>
 </head>
-<body class="bg-gray-50 text-gray-800">
+<body class="bg-gray-50 text-gray-800 relative">
 
     <!-- Navbar -->
     <nav class="bg-white/90 backdrop-blur-md p-3 md:p-4 shadow-sm sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center">
             <a href="index.php" class="text-xl md:text-2xl font-black text-blue-600 flex items-center gap-2">
                 <span class="text-2xl md:text-3xl">🌊 ล่องแพหนองกวาก</span>
-                <span class="hidden xs:inline">จองแพออนไลน์</span>
+                <span class="hidden xs:inline text-sm md:text-base font-bold text-gray-700">จองแพออนไลน์</span>
             </a>
             <div class="flex items-center space-x-2 md:space-x-4">
                 <a href="booking_calendar.php" class="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-3 py-2 rounded-xl text-xs transition font-bold flex items-center gap-1">
                     <i class="fa fa-calendar-alt text-blue-500"></i> ปฏิทินการจอง
                 </a>
+                
+                <!-- ปุ่มแอดไลน์ใน Navbar สำหรับดูด่วน -->
+                <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="hidden md:flex bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2 rounded-xl text-xs transition font-bold items-center gap-1.5">
+                    <i class="fab fa-line text-emerald-500 text-sm"></i> @906kkkfr
+                </a>
+
                 <?php if(isset($_SESSION['user_id'])): ?>
                     <span class="hidden sm:inline text-sm font-bold text-gray-600">👤 <?php echo htmlspecialchars($_SESSION['fullname'] ?? ''); ?></span>
                     <a href="logout.php" class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-xl text-[10px] md:text-xs transition font-bold shadow-lg shadow-red-100 btn-animate">ออกจากระบบ</a>
@@ -188,7 +205,7 @@ if ($conn) {
                             <i class="fa fa-users absolute left-4 top-1/2 -translate-y-1/2 text-blue-400 text-xs md:hidden"></i>
                             <select name="guests" class="w-full p-3 md:p-2 pl-10 md:pl-2 border-2 md:border-0 md:border-b-2 border-gray-100 md:border-gray-100 outline-none bg-white md:bg-transparent font-bold appearance-none rounded-xl md:rounded-none transition-all">
                                 <option value="2" <?php if($guests<=2) echo 'selected'; ?>>1-2 ท่าน</option>
-                                <option value="5" <?php if($guests>2 &&$guests<=5) echo 'selected'; ?>>3-5 ท่าน</option>
+                                <option value="5" <?php if($guests>2 && $guests<=5) echo 'selected'; ?>>3-5 ท่าน</option>
                                 <option value="10" <?php if($guests>5) echo 'selected'; ?>>6-10 ท่าน</option>
                             </select>
                         </div>
@@ -215,29 +232,31 @@ if ($conn) {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 md:gap-12">
             <?php
             if (!empty($rafts)):
-                foreach ($rafts as$row):
-                    $raft_id =$row['id'];
+                foreach ($rafts as $row):
+                    $raft_id = $row['id'];
                     $raft_name = htmlspecialchars($row['name']);
                     
                     // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
                     $displayImg = "";
                     $target_dir = __DIR__ . "/uploads/";
 
-                    if (!empty($row['featured_image']) && file_exists($target_dir .$row['featured_image'])) {
+                    if (!empty($row['featured_image']) && file_exists($target_dir . $row['featured_image'])) {
                         $displayImg = "uploads/" . $row['featured_image'];
                     } else {
                         for ($i = 1; $i <= 5; $i++) {
                             $img_col = "image_" . $i;
-                            if (!empty($row[$img_col]) && file_exists($target_dir .$row[$img_col])) {$displayImg = "uploads/" . $row[$img_col];
+                            if (!empty($row[$img_col]) && file_exists($target_dir . $row[$img_col])) {
+                                $displayImg = "uploads/" . $row[$img_col];
                                 break;
                             }
                         }
                     }
 
-                    if (empty($displayImg)) {$displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+                    if (empty($displayImg)) {
+                        $displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
                     }
             ?>
-                <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo$checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo$checkout_time; ?>" 
+                <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo $checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo $checkout_time; ?>" 
                    class="group bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-sm hover:shadow-2xl transition duration-500 overflow-hidden border border-gray-100 flex flex-col h-full">
                     <div class="relative h-60 md:h-72 overflow-hidden bg-gray-100">
                         <img src="<?php echo $displayImg; ?>" alt="<?php echo $raft_name; ?>" class="h-full w-full object-cover transition duration-700 group-hover:scale-110">
@@ -278,6 +297,67 @@ if ($conn) {
             ?>
         </div>
     </main>
+
+    <!-- 🟢 ส่วนหน้าแอดไลน์ร้านค้า (Official LINE Section) -->
+    <section class="container mx-auto px-6 mb-16">
+        <div class="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-[2.5rem] p-8 md:p-12 text-white shadow-2xl relative overflow-hidden">
+            <!-- ลวดลายพื้นหลัง -->
+            <div class="absolute -right-16 -bottom-16 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
+            <div class="absolute -left-16 -top-16 w-64 h-64 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none"></div>
+
+            <div class="relative z-10 flex flex-col lg:flex-row items-center justify-between gap-8 md:gap-12">
+                <!-- ข้อมูลฝั่งซ้าย -->
+                <div class="text-center lg:text-left max-w-xl">
+                    <span class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider text-emerald-100 mb-4">
+                        <i class="fab fa-line text-sm"></i> Official Account
+                    </span>
+                    <h3 class="text-3xl md:text-4xl font-black mb-3 leading-tight">
+                        แอดไลน์ร้าน ล่องแพหนองกวาก
+                    </h3>
+                    <p class="text-emerald-100 text-sm md:text-base leading-relaxed mb-6">
+                        รับแจ้งเตือนสถานะการจองทันใจ ส่งสลิปโอนเงิน หรือสอบถามพูดคุยกับเจ้าหน้าที่ได้ตลอด 24 ชั่วโมง สะดวก รวดเร็ว ไม่พลาดทุกการติดต่อ
+                    </p>
+
+                    <!-- ไฮไลท์ฟีเจอร์ -->
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
+                        <div class="bg-white/10 backdrop-blur-sm p-3.5 rounded-2xl border border-white/10">
+                            <p class="font-bold text-xs"><i class="fa fa-bell mr-1.5 text-yellow-300"></i> แจ้งเตือนคิวจอง</p>
+                            <p class="text-[11px] text-emerald-100 mt-1">อัปเดตสถานะทันทีใน LINE</p>
+                        </div>
+                        <div class="bg-white/10 backdrop-blur-sm p-3.5 rounded-2xl border border-white/10">
+                            <p class="font-bold text-xs"><i class="fa fa-receipt mr-1.5 text-cyan-300"></i> แจ้งส่งสลิป</p>
+                            <p class="text-[11px] text-emerald-100 mt-1">ส่งหลักฐานยืนยันง่ายๆ</p>
+                        </div>
+                        <div class="bg-white/10 backdrop-blur-sm p-3.5 rounded-2xl border border-white/10">
+                            <p class="font-bold text-xs"><i class="fa fa-comment-dots mr-1.5 text-pink-300"></i> สอบถามแอดมิน</p>
+                            <p class="text-[11px] text-emerald-100 mt-1">ดูแลข้อมูลและเส้นทาง</p>
+                        </div>
+                    </div>
+
+                    <!-- ปุ่มกดแอดไลน์ -->
+                    <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
+                        <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" 
+                           class="w-full sm:w-auto bg-white text-emerald-700 hover:bg-emerald-50 px-8 py-4 rounded-2xl font-black text-sm md:text-base shadow-xl transition flex items-center justify-center gap-2 btn-animate">
+                            <i class="fab fa-line text-2xl text-[#06C755]"></i> เพิ่มเพื่อน LINE ID: @906kkkfr
+                        </a>
+                        <span class="text-xs text-emerald-100 font-bold">หรือค้นหาไอดี: <span class="underline font-black text-white">@906kkkfr</span></span>
+                    </div>
+                </div>
+
+                <!-- QR Code ฝั่งขวาสำหรับสแกน -->
+                <div class="bg-white p-6 rounded-3xl shadow-xl text-center text-gray-800 shrink-0 border-4 border-emerald-300/40">
+                    <p class="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-3">สแกน QR Code เพิ่มเพื่อน</p>
+                    <div class="bg-gray-50 p-2 rounded-2xl inline-block shadow-inner mb-3">
+                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=https://line.me/R/ti/p/@906kkkfr" 
+                             alt="LINE QR Code @906kkkfr" 
+                             class="w-40 h-40 object-contain mx-auto">
+                    </div>
+                    <p class="text-xs font-black text-gray-700">@906kkkfr</p>
+                    <p class="text-[10px] text-gray-400 mt-0.5">ล่องแพหนองกวาก จ.หนองคาย</p>
+                </div>
+            </div>
+        </div>
+    </section>
     
     <!-- Footer -->
     <footer class="bg-white py-12 md:py-20 border-t border-gray-100 text-center">
@@ -290,10 +370,19 @@ if ($conn) {
                 <p class="text-[10px] md:text-xs text-gray-400 font-bold">สแกนเพื่อจองผ่านมือถือได้ทันที<br>สะดวก รวดเร็ว ทุกที่ทุกเวลา</p>
             </div>
             <p class="text-gray-400 text-[9px] md:text-[10px] font-black uppercase tracking-widest">
-                สัมผัสธรรมชาติที่แตกต่าง
+                สัมผัสธรรมชาติที่แตกต่าง ล่องแพหนองกวาก
             </p>
         </div>
     </footer>
+
+    <!-- 🟢 ปุ่มลอย LINE (Floating Action Button) มุมขวาล่าง -->
+    <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" 
+       class="fixed bottom-6 right-6 z-50 bg-[#06C755] hover:bg-[#05b04b] text-white p-4 rounded-full shadow-2xl flex items-center justify-center gap-2 group transition-all duration-300 hover:pr-6 hover:shadow-emerald-300 hover:-translate-y-1">
+        <i class="fab fa-line text-3xl"></i>
+        <span class="max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs transition-all duration-300 font-bold text-sm">
+            แอดไลน์ร้าน @906kkkfr
+        </span>
+    </a>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script>
