@@ -1,39 +1,103 @@
+<?php
+// กำหนดค่าการเชื่อมต่อ LINE Messaging API
+if (!defined('LINE_CHANNEL_ACCESS_TOKEN')) {
+    define('LINE_CHANNEL_ACCESS_TOKEN', 'jStaztWHf7QXNoCVTPhoqat7sCmK5HZp5GBJXrlUv+c9NMT26dzuAbalCnpxp53VSGoGBIU16cV5CSfyuKq4qpqbBv+Xd8ju3CTw3/sHfa3PpcS2RwYykgN3CqcJye6QEqexCW+w0MD8B9tF5w+FxAdB04t89/1O/w1cDnyilFU=');
+}
+if (!defined('LINE_ADMIN_USER_ID')) {
+    define('LINE_ADMIN_USER_ID', 'Uc363e24c7774830ce61b1995d0b11e9d');
+}
+
 /**
- * ฟังก์ชันส่งรูปภาพและข้อความเข้า LINE แอดมิน
+ * 1. ฟังก์ชันส่งข้อความตัวอักษรเข้า LINE (Push Message)
  */
-function send_line_slip_alert($image_url, $caption_text) {
-    if (empty($image_url)) return false;
+if (!function_exists('send_line_message')) {
+    function send_line_message($to_user_id, $message = null) {
+        if ($message === null) {
+            $message = $to_user_id;
+            $to_user_id = LINE_ADMIN_USER_ID;
+        }
 
-    $url = 'https://api.line.me/v2/bot/message/push';
-    $headers = [
-        'Content-Type: application/json; charset=UTF-8',
-        'Authorization: Bearer ' . LINE_CHANNEL_ACCESS_TOKEN
-    ];
+        if (empty($to_user_id) || empty($message)) {
+            return ['status' => false, 'error' => 'Missing recipient or message'];
+        }
 
-    $payload = [
-        'to' => LINE_ADMIN_USER_ID,
-        'messages' => [
-            [
-                'type' => 'text',
-                'text' => $caption_text
-            ],
-            [
-                'type' => 'image',
-                'originalContentUrl' => $image_url,
-                'previewImageUrl' => $image_url
+        $url = 'https://api.line.me/v2/bot/message/push';
+        $headers = [
+            'Content-Type: application/json; charset=UTF-8',
+            'Authorization: Bearer ' . LINE_CHANNEL_ACCESS_TOKEN
+        ];
+
+        $payload = [
+            'to' => $to_user_id,
+            'messages' => [
+                [
+                    'type' => 'text',
+                    'text' => $message
+                ]
             ]
-        ]
-    ];
+        ];
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_UNICODE));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    $response = curl_exec($ch);
-    curl_close($ch);
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_UNICODE));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
 
-    return $response;
+        return [
+            'status' => ($http_code === 200),
+            'http_code' => $http_code,
+            'response' => $response,
+            'error' => $curl_error
+        ];
+    }
+}
+
+/**
+ * 2. ฟังก์ชันส่งรูปภาพสลิปพร้อมข้อความเข้า LINE แอดมิน
+ */
+if (!function_exists('send_line_slip_alert')) {
+    function send_line_slip_alert($image_url, $caption_text) {
+        if (empty($image_url)) return false;
+
+        $url = 'https://api.line.me/v2/bot/message/push';
+        $headers = [
+            'Content-Type: application/json; charset=UTF-8',
+            'Authorization: Bearer ' . LINE_CHANNEL_ACCESS_TOKEN
+        ];
+
+        $payload = [
+            'to' => LINE_ADMIN_USER_ID,
+            'messages' => [
+                [
+                    'type' => 'text',
+                    'text' => $caption_text
+                ],
+                [
+                    'type' => 'image',
+                    'originalContentUrl' => $image_url,
+                    'previewImageUrl' => $image_url
+                ]
+            ]
+        ];
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_UNICODE));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        
+        $response = curl_exec($ch);
+        curl_close($ch);
+
+        return $response;
+    }
 }
