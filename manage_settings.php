@@ -1,6 +1,6 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
@@ -23,8 +23,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['save_settings'])) {
 // 4. ดึงข้อมูลมาแสดง
 $settings = [];
 $res = $conn->query("SELECT * FROM settings");
-while ($row = $res->fetch_assoc()) {
-    $settings[$row['setting_key']] = $row['setting_value'];
+if ($res) {
+    while ($row = $res->fetch_assoc()) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
 }
 ?>
 
@@ -66,19 +68,19 @@ while ($row = $res->fetch_assoc()) {
                     
                     <div>
                         <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">ชื่อธุรกิจ</label>
-                        <input type="text" name="settings[business_name]" value="<?php echo htmlspecialchars($settings['business_name']); ?>"
+                        <input type="text" name="settings[business_name]" value="<?php echo htmlspecialchars($settings['business_name'] ?? ''); ?>"
                                class="w-full px-5 py-3 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-blue-400 outline-none font-bold">
                     </div>
 
                     <div class="grid grid-cols-2 gap-6">
                         <div>
                             <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">เวลาเปิด (เริ่มต้นจอง)</label>
-                            <input type="time" name="settings[open_time]" value="<?php echo $settings['open_time']; ?>"
+                            <input type="time" name="settings[open_time]" value="<?php echo htmlspecialchars($settings['open_time'] ?? ''); ?>"
                                    class="w-full px-5 py-3 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-blue-400 outline-none font-bold">
                         </div>
                         <div>
                             <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">เวลาปิด (สิ้นสุดจอง)</label>
-                            <input type="time" name="settings[close_time]" value="<?php echo $settings['close_time']; ?>"
+                            <input type="time" name="settings[close_time]" value="<?php echo htmlspecialchars($settings['close_time'] ?? ''); ?>"
                                    class="w-full px-5 py-3 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-blue-400 outline-none font-bold">
                         </div>
                     </div>
