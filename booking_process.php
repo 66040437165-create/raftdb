@@ -176,7 +176,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $insert_values[] = '$' . $p_idx++;
         $params[] = (int)$_SESSION['user_id'];
     }
-    // line_user_id หรือ line_id (เก็บไว้ใช้อ้างอิงส่งแจ้งเตือนภายหลัง)
+    // line_user_id หรือ line_id
     $sess_line_id = $_SESSION['line_user_id'] ?? $_SESSION['user_line_id'] ?? null;
     if (in_array('line_user_id', $b_cols) && !empty($sess_line_id)) {
         $insert_fields[] = "line_user_id";
@@ -287,12 +287,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     if ($result_insert && $row_ins = pg_fetch_assoc($result_insert)) {
         $booking_id = intval($row_ins['id']);
 
-        // อัปเดตสถานะแพให้เป็น 'รอตรวจสอบ' (pending)
-        @pg_query_params($conn, "UPDATE rafts SET status = 'pending' WHERE id = $1", array($raft_id));
+        // 🟢 หมายเหตุ: ไม่ต้อง UPDATE rafts ให้เป็น pending แล้ว 
+        // ปล่อยให้สถานะแพคงเดิม เพื่อให้หน้า index.php ตรวจสอบคิวว่างตามวันที่จริงผ่านตาราง bookings
 
         // 4. ส่งข้อความแจ้งเตือนทาง LINE
         if (function_exists('send_line_message')) {
-            // ดึง Domain สำหรับสร้าง Link
             $site_host = $_SERVER['HTTP_HOST'] ?? 'raftdb.onrender.com';
 
             // 4.1 ข้อความแจ้งเตือนสำหรับ "แอดมิน"
@@ -308,7 +307,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $admin_msg .= "━━━━━━━━━━━━━━━━\n";
             $admin_msg .= "👉 ตรวจสอบในระบบหลังบ้าน: https://{$site_host}/admin_dashboard.php";
 
-            // ยิงแจ้งเตือนหาแอดมิน
             if (defined('LINE_ADMIN_USER_ID')) {
                 send_line_message(LINE_ADMIN_USER_ID, $admin_msg);
             }
