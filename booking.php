@@ -2,21 +2,35 @@
 session_start();
 require_once __DIR__ . '/db_config.php';
 
-// 1. ดึงข้อมูลผู้ใช้งาน (ถ้าล็อกอินอยู่)
-$is_logged_in = isset($_SESSION['user_id']);$user_id = $is_logged_in ? intval($_SESSION['user_id']) : null;
-$user_fullname =$is_logged_in ? ($_SESSION['fullname'] ?? '') : '';$user_tel = '';
+// 1. ดึงข้อมูลผู้ใช้งาน และตรวจสอบสถานะ LINE Login
+$is_logged_in = isset($_SESSION['user_id']);
+$user_id = $is_logged_in ? intval($_SESSION['user_id']) : null;
+$user_fullname = $is_logged_in ? ($_SESSION['fullname'] ?? '') : '';
+$user_tel = '';
 
-if ($is_logged_in && $conn) {$is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || 
+// ตรวจสอบ LINE User ID ของลูกค้าจาก Session
+$line_user_id = $_SESSION['line_user_id'] ?? $_SESSION['user_line_id'] ?? null;
+$line_display_name = $_SESSION['line_display_name'] ?? '';
+
+if (empty($user_fullname) && !empty($line_display_name)) {
+    $user_fullname = $line_display_name;
+}
+
+if ($is_logged_in && $conn) {
+    $is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || 
                 (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1);
     
     if ($is_admin) {
-        $user_fullname = '';$user_tel = '';
+        $user_fullname = '';
+        $user_tel = '';
     } else {
         // ดึงข้อมูลผู้ใช้จากตาราง users
         $user_res = @pg_query_params($conn, "SELECT * FROM users WHERE id = $1 LIMIT 1", array($user_id));
-        if ($user_res && pg_num_rows($user_res) > 0) {$user_data = pg_fetch_assoc($user_res);$user_tel = $user_data['tel'] ?? $user_data['phone'] ?? '';
+        if ($user_res && pg_num_rows($user_res) > 0) {
+            $user_data = pg_fetch_assoc($user_res);
+            $user_tel = $user_data['tel'] ?? $user_data['phone'] ?? '';
             if (empty($user_fullname)) {
-                $user_fullname =$user_data['fullname'] ?? $user_data['full_name'] ?? $user_data['name'] ?? '';
+                $user_fullname = $user_data['fullname'] ?? $user_data['full_name'] ?? $user_data['name'] ?? '';
             }
         }
     }
@@ -29,10 +43,10 @@ if (!isset($_GET['raft_id']) || empty($_GET['raft_id'])) {
 }
 
 $raft_id = intval($_GET['raft_id']);
-$checkin_val =$_GET['checkin'] ?? date('Y-m-d'); 
+$checkin_val = $_GET['checkin'] ?? date('Y-m-d'); 
 $checkout_val = $_GET['checkout'] ?? date('Y-m-d', strtotime($checkin_val . ' +1 day')); 
-$checkin_time_val =$_GET['checkin_time'] ?? '09:00';
-$checkout_time_val =$_GET['checkout_time'] ?? '17:30';
+$checkin_time_val = $_GET['checkin_time'] ?? '09:00';
+$checkout_time_val = $_GET['checkout_time'] ?? '17:30';
 
 // ดึงข้อมูลแพตาม id (PostgreSQL)
 $raft = null;
@@ -59,7 +73,7 @@ if ($conn) {
         $res_imgs = @pg_query_params($conn, "SELECT image_path, is_main FROM raft_images WHERE raft_id = $1 ORDER BY is_main DESC", array($raft_id));
         if ($res_imgs && pg_num_rows($res_imgs) > 0) {
             while ($img = pg_fetch_assoc($res_imgs)) {
-                $images[] =$img;
+                $images[] = $img;
             }
         }
     }
@@ -68,32 +82,34 @@ if ($conn) {
 // 2.2 ถ้าใน raft_images ไม่มี ให้ดึงจากคอลัมน์ featured_image และ image_1 ถึง image_5
 if (empty($images)) {
     if (!empty($raft['featured_image'])) {
-        $images[] = ['image_path' =>$raft['featured_image'], 'is_main' => 1];
+        $images[] = ['image_path' => $raft['featured_image'], 'is_main' => 1];
     }
     
     for ($i = 1; $i <= 5; $i++) {
         $col_name = "image_" . $i;
-        if (!empty($raft[$col_name])) {$images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+        if (!empty($raft[$col_name])) {
+            $images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
         }
     }
 }
 
-$main_image = !empty($images) ?$images[0]['image_path'] : '';
+$main_image = !empty($images) ? $images[0]['image_path'] : '';
 
 // 3. ดึงค่าตั้งค่าเวลาเปิด-ปิด
 $settings = [];
 if ($conn) {
     $res_settings = @pg_query($conn, "SELECT setting_key, setting_value FROM settings");
     if ($res_settings) {
-        while ($row = pg_fetch_assoc($res_settings)) {$settings[$row['setting_key']] =$row['setting_value'];
+        while ($row = pg_fetch_assoc($res_settings)) {
+            $settings[$row['setting_key']] = $row['setting_value'];
         }
     }
 }
-$open_time =$settings['open_time'] ?? '09:00';
-$close_time =$settings['close_time'] ?? '17:30';
+$open_time = $settings['open_time'] ?? '09:00';
+$close_time = $settings['close_time'] ?? '17:30';
 
 if (empty($_GET['checkin_time'])) {
-    $checkin_time_val =$open_time;
+    $checkin_time_val = $open_time;
 }
 ?>
 <!DOCTYPE html>
@@ -146,7 +162,7 @@ if (empty($_GET['checkin_time'])) {
             <!-- Image Thumbnails -->
             <?php if (count($images) > 1): ?>
                 <div class="flex gap-2 p-3 bg-slate-900/90 backdrop-blur-md overflow-x-auto no-scrollbar scroll-smooth">
-                    <?php foreach ($images as $index =>$img): ?>
+                    <?php foreach ($images as $index => $img): ?>
                         <div class="shrink-0 cursor-pointer group" onclick="setGalleryIndex(<?php echo $index; ?>)">
                             <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
                                  class="main-thumb-item w-20 h-16 md:w-24 md:h-20 object-cover rounded-xl border-2 <?php echo ($index == 0) ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'; ?> transition-all duration-300"
@@ -166,15 +182,49 @@ if (empty($_GET['checkin_time'])) {
             <input type="hidden" name="booking_type" id="booking_type" value="daily">
             
             <input type="hidden" id="price_per_day" value="<?php echo $raft['price_per_day']; ?>">
-            <input type="hidden" id="price_per_hour" value="<?php echo isset($raft['price_per_hour']) ?$raft['price_per_hour'] : 0; ?>">
+            <input type="hidden" id="price_per_hour" value="<?php echo isset($raft['price_per_hour']) ? $raft['price_per_hour'] : 0; ?>">
             <input type="hidden" name="total_price" id="total_price_input" value="<?php echo $raft['price_per_day']; ?>">
             
             <input type="hidden" id="setting_open_time" value="<?php echo $open_time; ?>">
             <input type="hidden" id="setting_close_time" value="<?php echo $close_time; ?>">
 
             <div class="space-y-8">
-                <!-- Section 1: Guest Information -->
+                <!-- Section 1: Guest Information & LINE Alert Status -->
                 <div class="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                    
+                    <!-- ส่วนแจ้งเตือนสถานะ LINE -->
+                    <?php if (!empty($line_user_id)): ?>
+                        <div class="mb-5 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 shadow-sm">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-[#06C755] text-white rounded-full flex items-center justify-center shrink-0 text-xl shadow-md shadow-emerald-200">
+                                    <i class="fab fa-line"></i>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-black text-emerald-800">เชื่อมต่อ LINE รับแจ้งเตือนแล้ว</p>
+                                    <p class="text-[11px] text-emerald-600 font-semibold">บอทจะส่งใบยืนยันการจองเข้า LINE ของคุณทันทีหลังบันทึกรายการ</p>
+                                </div>
+                            </div>
+                            <span class="bg-emerald-200/70 text-emerald-800 text-[10px] font-black px-3 py-1 rounded-full shrink-0">
+                                <i class="fa fa-check-circle"></i> เปิดแจ้งเตือน
+                            </span>
+                        </div>
+                    <?php else: ?>
+                        <div class="mb-5 p-5 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl text-white shadow-lg shadow-emerald-200/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                            <div class="flex items-center gap-3 text-center sm:text-left">
+                                <div class="w-11 h-11 bg-white text-[#06C755] rounded-xl flex items-center justify-center shrink-0 text-2xl shadow-sm">
+                                    <i class="fab fa-line"></i>
+                                </div>
+                                <div>
+                                    <h4 class="font-black text-sm">ต้องการรับใบยืนยันการจองผ่าน LINE ไหม?</h4>
+                                    <p class="text-[11px] text-emerald-100 mt-0.5">กดเข้าสู่ระบบด้วย LINE เพื่อให้ระบบส่งสรุปยอดและเลขบัญชีเข้าแชทคุณอัตโนมัติ</p>
+                                </div>
+                            </div>
+                            <a href="line_login.php" class="w-full sm:w-auto bg-white text-emerald-700 hover:bg-emerald-50 font-black px-4 py-2.5 rounded-xl text-xs transition shadow-md flex items-center justify-center gap-1.5 shrink-0 active:scale-95">
+                                <i class="fab fa-line text-lg text-[#06C755]"></i> เข้าสู่ระบบด้วย LINE
+                            </a>
+                        </div>
+                    <?php endif; ?>
+
                     <h3 class="text-xs font-black text-gray-400 uppercase tracking-widest mb-5 flex items-center">
                         <i class="fa fa-id-card-o mr-2 text-blue-500"></i> ข้อมูลผู้ติดต่อ
                     </h3>
@@ -265,7 +315,7 @@ if (empty($_GET['checkin_time'])) {
                         <div class="relative z-10 flex justify-between items-center text-white">
                             <div class="text-left">
                                 <p class="text-[10px] text-blue-200 bg-black/10 px-3 py-2 rounded-xl border border-white/10 backdrop-blur-sm" id="price_note">
-                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo $open_time; ?> - <?php echo$close_time; ?> น.
+                                    <i class="fa fa-info-circle mr-1"></i> เวลาให้บริการ <?php echo $open_time; ?> - <?php echo $close_time; ?> น.
                                 </p>
                             </div>
                             <div class="text-right">
@@ -317,7 +367,7 @@ if (empty($_GET['checkin_time'])) {
 
         <?php if (count($images) > 1): ?>
             <div class="flex justify-center gap-2 overflow-x-auto py-2 no-scrollbar max-w-full">
-                <?php foreach ($images as $idx =>$img): ?>
+                <?php foreach ($images as $idx => $img): ?>
                     <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
                          onclick="setLightboxImage(<?php echo $idx; ?>)"
                          class="lightbox-thumb-item w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl border-2 cursor-pointer transition opacity-50 hover:opacity-100 shrink-0" 
@@ -330,8 +380,8 @@ if (empty($_GET['checkin_time'])) {
     <script>
         const galleryImages = <?php 
             $js_imgs = [];
-            foreach ($images as$i) { 
-                $js_imgs[] = 'uploads/' .$i['image_path']; 
+            foreach ($images as $i) { 
+                $js_imgs[] = 'uploads/' . $i['image_path']; 
             }
             echo json_encode(!empty($js_imgs) ? $js_imgs : ["uploads/" . $main_image]); 
         ?>;
