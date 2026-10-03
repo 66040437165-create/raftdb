@@ -1,13 +1,78 @@
 <?php
 session_start();
-require_once __DIR__ . '/db_config.php';
+
+if (file_exists(__DIR__ . '/db_config.php')) {
+    require_once __DIR__ . '/db_config.php';
+} else {
+    require_once __DIR__ . '/../db_config.php';
+}
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
 }
 
-// 2. ดึงข้อมูลแพตาม id (PostgreSQL Parameterized Query)
+// 🟢 ฟังก์ชันช่วยจัดการ Path รูปภาพ (รองรับ Base64, URL, และ Path เก่า)
+if (!function_exists('get_raft_image_url')) {
+    function get_raft_image_url($image_path) {
+        if (empty($image_path)) return '';
+        $image_path = trim($image_path);
+        if (preg_match('/^(https?:\/\/|data:image\/)/i', $image_path)) {
+            return $image_path;
+        }
+        if (strpos($image_path, 'uploads/') === 0) {
+            return $image_path;
+        }
+        return 'uploads/' . $image_path;
+    }
+}
+
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 (ป้องกันรูปหายบน Render 100%)
+function convert_image_to_base64($tmp_file, $max_width = 1000) {
+    if (!file_exists($tmp_file)) return '';
+
+    $image_info = @getimagesize($tmp_file);
+    if ($image_info && function_exists('imagecreatefromstring')) {
+        $width  = $image_info[0];
+        $height = $image_info[1];
+        $mime   = $image_info['mime'];
+
+        $data = file_get_contents($tmp_file);
+        $src_img = @imagecreatefromstring($data);
+
+        if ($src_img) {
+            if ($width > $max_width) {
+                $new_width  = $max_width;
+                $new_height = intval($height * ($max_width / $width));
+                $dst_img    = imagecreatetruecolor($new_width, $new_height);
+
+                if ($mime === 'image/png' || $mime === 'image/webp') {
+                    imagealphablending($dst_img, false);
+                    imagesavealpha($dst_img, true);
+                    $transparent = imagecolorallocatealpha($dst_img, 255, 255, 255, 127);
+                    imagefilledrectangle($dst_img, 0, 0, $new_width, $new_height, $transparent);
+                }
+
+                imagecopyresampled($dst_img, $src_img, 0, 0, 0, 0, $new_width, $new_height, $width, $height);
+                imagedestroy($src_img);
+                $src_img = $dst_img;
+            }
+
+            ob_start();
+            imagejpeg($src_img, null, 80);
+            $compressed_data = ob_get_clean();
+            imagedestroy($src_img);
+
+            return 'data:image/jpeg;base64,' . base64_encode($compressed_data);
+        }
+    }
+
+    $raw_data = file_get_contents($tmp_file);
+    $mime_type = mime_content_type($tmp_file) ?: 'image/jpeg';
+    return 'data:' . $mime_type . ';base64,' . base64_encode($raw_data);
+}
+
+// 2. ดึงข้อมูลแพตาม id
 if (!isset($_GET['id'])) {
     header("Location: manage_rafts.php");
     exit();
@@ -28,19 +93,37 @@ if (!$raft) {
     exit(); 
 }
 
-// 3. ระบบลบรูปภาพรายช่อง (image_1 - image_5)
+// ดึงรายการประเภทแพสำหรับ Dropdown
+$raft_types = [];
+if ($conn) {
+    $res_types = @pg_query($conn, "SELECT * FROM raft_types ORDER BY id ASC");
+    if ($res_types) {
+        while ($t = pg_fetch_assoc($res_types)) {
+            $raft_types[] = $t;
+        }
+    }
+}
+
+// 3. ระบบลบรูปภาพรายช่อง (image_1 - image_5) อย่างปลอดภัย
 if (isset($_GET['delete_slot'])) {
     $slot = intval($_GET['delete_slot']);
     if ($slot >= 1 && $slot <= 5) {
         $col_name = "image_" . $slot;
-        $img_name = $raft[$col_name] ?? '';
+        $img_name = trim($raft[$col_name] ?? '');
 
         if (!empty($img_name)) {
-            // ลบไฟล์จริงออกจาก Folder
-            $full_path = "uploads/" . $img_name;
-            if (file_exists($full_path)) { @unlink($full_path); }
+            // ลบไฟล์จริงเฉพาะกรณีที่เป็นไฟล์บนเครื่อง (ไม่ใช่ Base64 หรือ URL)
+            if (!preg_match('/^(https?:\/\/|data:image\/)/i', $img_name)) {
+                $clean_name = basename($img_name);
+                $chk_used = @pg_query_params($conn, "SELECT COUNT(*) as cnt FROM rafts WHERE id != $1 AND (image_1 = $2 OR image_2 = $2 OR image_3 = $2 OR image_4 = $2 OR image_5 = $2 OR featured_image = $2)", array($id, $clean_name));
+                $row_used = $chk_used ? pg_fetch_assoc($chk_used) : null;
+                if (intval($row_used['cnt'] ?? 0) === 0) {
+                    $target_del = (strpos($img_name, 'uploads/') === 0) ? $img_name : "uploads/" . $img_name;
+                    if (file_exists($target_del)) { @unlink($target_del); }
+                }
+            }
 
-            // ถ้ารูปที่ลบตรงกับ featured_image ให้เคลียร์ featured_image ด้วย
+            // ถ้ารูปที่ลบตรงกับ featured_image ให้เคลียร์หรือหาตัวแทน
             if (($raft['featured_image'] ?? '') === $img_name) {
                 @pg_query_params($conn, "UPDATE rafts SET $col_name = '', featured_image = '' WHERE id = $1", array($id));
             } else {
@@ -57,10 +140,10 @@ if (isset($_GET['set_featured_slot'])) {
     $slot = intval($_GET['set_featured_slot']);
     if ($slot >= 1 && $slot <= 5) {
         $col_name = "image_" . $slot;
-        $img_name = $raft[$col_name] ?? '';
+        $img_val = $raft[$col_name] ?? '';
 
-        if (!empty($img_name)) {
-            @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($img_name, $id));
+        if (!empty($img_val)) {
+            @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE id = $2", array($img_val, $id));
         }
     }
     header("Location: edit_raft.php?id=" . $id);
@@ -69,50 +152,37 @@ if (isset($_GET['set_featured_slot'])) {
 
 // 5. บันทึกการแก้ไขข้อมูลและอัปโหลดรูปภาพใหม่
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $raft_id = intval($_POST['raft_id'] ?? 0);
-    $name = trim($_POST['name'] ?? '');
-    $capacity = intval($_POST['capacity'] ?? 0);
-    $price_per_day = floatval($_POST['price_per_day'] ?? 0);
+    $raft_id        = intval($_POST['raft_id'] ?? 0);
+    $name           = trim($_POST['name'] ?? '');
+    $raft_type_id   = intval($_POST['raft_type_id'] ?? 0);
+    $capacity       = intval($_POST['capacity'] ?? 0);
+    $price_per_day  = floatval($_POST['price_per_day'] ?? 0);
     $price_per_hour = isset($_POST['price_per_hour']) && $_POST['price_per_hour'] !== '' ? floatval($_POST['price_per_hour']) : 0;
-    $description = trim($_POST['description'] ?? '');
-    $status = $_POST['status'] ?? 'available';
+    $description    = trim($_POST['description'] ?? '');
+    $status         = $_POST['status'] ?? 'available';
 
-    // ดึงข้อมูลรูปภาพปัจจุบันก่อนอัปเดต
-    $res_curr = @pg_query_params($conn, "SELECT * FROM rafts WHERE id = $1", array($raft_id));
-    $current_raft = ($res_curr) ? pg_fetch_assoc($res_curr) : [];
+    // วนลูปจัดการไฟล์รูปภาพ 5 ช่อง (image_1 - image_5) แปลงเป็น Base64 ทั้งหมด
     $image_updates = [];
-
-    $target_dir = "uploads/";
-    if (!is_dir($target_dir)) { @mkdir($target_dir, 0777, true); }
-
-    // วนลูปจัดการไฟล์รูปภาพ 5 ช่อง (image_1 - image_5)
     for ($i = 1; $i <= 5; $i++) {
         $input_name = "image_" . $i;
         if (isset($_FILES[$input_name]) && $_FILES[$input_name]['error'] === 0) {
-            $file_ext = strtolower(pathinfo($_FILES[$input_name]["name"], PATHINFO_EXTENSION));
-            if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
-                
-                // ถ้ามีรูปเก่าในช่องนี้ ให้ลบไฟล์เก่าก่อน
-                if (!empty($current_raft[$input_name])) {
-                    @unlink($target_dir . $current_raft[$input_name]);
-                }
+            $tmp_file = $_FILES[$input_name]["tmp_name"];
+            $image_base64 = convert_image_to_base64($tmp_file);
 
-                $new_file_name = "raft_" . $raft_id . "_img" . $i . "_" . time() . "." . $file_ext;
-                if (move_uploaded_file($_FILES[$input_name]["tmp_name"], $target_dir . $new_file_name)) {
-                    $image_updates[$input_name] = $new_file_name;
-                }
+            if (!empty($image_base64)) {
+                $image_updates[$input_name] = $image_base64;
             }
         }
     }
 
-    // อัปเดตข้อมูลทั่วไป (PostgreSQL syntax)
-    $sql_update = "UPDATE rafts SET name=$1, capacity=$2, price_per_day=$3, price_per_hour=$4, description=$5, status=$6 WHERE id=$7";
-    @pg_query_params($conn, $sql_update, array($name, $capacity, $price_per_day, $price_per_hour, $description, $status, $raft_id));
+    // อัปเดตข้อมูลทั่วไป
+    $sql_update = "UPDATE rafts SET name=$1, raft_type_id=$2, capacity=$3, price_per_day=$4, price_per_hour=$5, description=$6, status=$7 WHERE id=$8";
+    @pg_query_params($conn, $sql_update, array($name, $raft_type_id, $capacity, $price_per_day, $price_per_hour, $description, $status, $raft_id));
 
-    // อัปเดตชื่อไฟล์รูปภาพลงคอลัมน์ image_1 - image_5
-    foreach ($image_updates as $col => $filename) {
+    // อัปเดตรูปภาพที่เลือกใหม่ลงคอลัมน์ image_1 - image_5
+    foreach ($image_updates as $col => $base64_data) {
         if (preg_match('/^image_[1-5]$/', $col)) {
-            @pg_query_params($conn, "UPDATE rafts SET $col = $1 WHERE id = $2", array($filename, $raft_id));
+            @pg_query_params($conn, "UPDATE rafts SET $col = $1 WHERE id = $2", array($base64_data, $raft_id));
         }
     }
 
@@ -175,18 +245,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         
                         <!-- Image Gallery Section (5 Slots) -->
                         <div class="order-2 lg:order-1">
-                            <label class="block text-xs font-black text-slate-400 mb-6 uppercase tracking-widest border-l-4 border-blue-500 pl-3 italic">จัดการรูปภาพแพ (สูงสุด 5 รูป)</label>
+                            <label class="block text-xs font-black text-slate-400 mb-6 uppercase tracking-widest border-l-4 border-blue-500 pl-3 italic">จัดการรูปภาพแพ (สูงสุด 5 รูป - รูปจะไม่หายแม้เซิร์ฟเวอร์ Restart)</label>
                             
                             <div class="space-y-4">
                                 <?php for ($i = 1; $i <= 5; $i++): 
                                     $col = "image_" . $i;
-                                    $img_name = $raft[$col] ?? '';
-                                    $is_featured = (!empty($img_name) && ($raft['featured_image'] ?? '') === $img_name);
+                                    $img_val = $raft[$col] ?? '';
+                                    $img_src = get_raft_image_url($img_val);
+                                    $is_featured = (!empty($img_val) && ($raft['featured_image'] ?? '') === $img_val);
                                 ?>
                                     <div class="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center gap-4">
                                         <div class="w-full sm:w-28 h-20 shrink-0 bg-gray-200 rounded-xl overflow-hidden relative border border-slate-200">
-                                            <?php if (!empty($img_name)): ?>
-                                                <img src="uploads/<?php echo htmlspecialchars($img_name); ?>" class="w-full h-full object-cover">
+                                            <?php if (!empty($img_src)): ?>
+                                                <img src="<?php echo htmlspecialchars($img_src); ?>" 
+                                                     onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\'w-full h-full flex flex-col items-center justify-center text-amber-600 text-[9px] font-bold\'><i class=\'fa fa-exclamation-triangle mb-1\'></i>รูปไม่พบ</div>';" 
+                                                     class="w-full h-full object-cover">
                                                 <?php if ($is_featured): ?>
                                                     <span class="absolute top-1 left-1 bg-amber-500 text-white text-[9px] font-black px-2 py-0.5 rounded-md shadow">รูปหลัก</span>
                                                 <?php endif; ?>
@@ -201,7 +274,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                         <div class="flex-grow w-full">
                                             <div class="flex justify-between items-center mb-1">
                                                 <span class="text-xs font-black text-slate-700">รูปที่ <?php echo $i; ?></span>
-                                                <?php if (!empty($img_name)): ?>
+                                                <?php if (!empty($img_val)): ?>
                                                     <div class="flex gap-2">
                                                         <?php if (!$is_featured): ?>
                                                             <a href="?id=<?php echo $id; ?>&set_featured_slot=<?php echo $i; ?>" class="text-[10px] font-bold text-amber-600 hover:underline flex items-center gap-1">
@@ -232,6 +305,18 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                     <label class="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">ชื่อแพ <span class="text-rose-500">*</span></label>
                                     <input type="text" name="name" value="<?php echo htmlspecialchars($raft['name']); ?>" required 
                                            class="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800 transition">
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-black text-slate-400 mb-2 uppercase tracking-widest">ประเภทแพ <span class="text-rose-500">*</span></label>
+                                    <select name="raft_type_id" required class="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800 transition">
+                                        <option value="">-- เลือกประเภทแพ --</option>
+                                        <?php foreach ($raft_types as $t): ?>
+                                            <option value="<?php echo htmlspecialchars($t['id']); ?>" <?php if(($raft['raft_type_id'] ?? 0) == $t['id']) echo 'selected'; ?>>
+                                                <?php echo htmlspecialchars($t['name'] ?? $t['type_name'] ?? ('ประเภทที่ ' . $t['id'])); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
                                 </div>
                                 
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
