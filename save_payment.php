@@ -33,30 +33,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         exit();
     }
 
-    // 2. ตรวจสอบว่ามีข้อมูลการจองจริงหรือไม่
-    $sql_bk = "SELECT b.*, COALESCE(r.name, r.raft_name, '') AS raft_name 
-               FROM bookings b 
-               LEFT JOIN rafts r ON b.raft_id = r.id 
-               WHERE b.id = $1 LIMIT 1";
+    // 2. ค้นหาข้อมูลการจองจากตาราง bookings อย่างปลอดภัย (รองรับทั้ง id และ booking_id)
+    $booking = null;
+    $sql_bk = "SELECT * FROM bookings WHERE id = $1 LIMIT 1";
     $booking_res = @pg_query_params($conn, $sql_bk, array($booking_id));
 
     if (!$booking_res || pg_num_rows($booking_res) === 0) {
-        $sql_bk = "SELECT b.*, COALESCE(r.name, r.raft_name, '') AS raft_name 
-                   FROM bookings b 
-                   LEFT JOIN rafts r ON b.raft_id = r.raft_id 
-                   WHERE b.booking_id = $1 LIMIT 1";
+        $sql_bk = "SELECT * FROM bookings WHERE booking_id = $1 LIMIT 1";
         $booking_res = @pg_query_params($conn, $sql_bk, array($booking_id));
         
         if (!$booking_res || pg_num_rows($booking_res) === 0) {
-            echo "<script>alert('ไม่พบข้อมูลการจองในระบบ'); window.location.href='index.php';</script>";
+            echo "<script>alert('ไม่พบข้อมูลการจองในระบบ (รหัส: $booking_id)'); window.location.href='index.php';</script>";
             exit();
         }
     }
     $booking = pg_fetch_assoc($booking_res);
 
+    // 3. ดึงชื่อแพแยกต่างหาก เพื่อป้องกัน SQL Error จากชื่อคอลัมน์ที่ไม่ตรงกัน
+    $raft_name = '';
+    $raft_id = intval($booking['raft_id'] ?? 0);
+    if ($raft_id > 0) {
+        $raft_res = @pg_query_params($conn, "SELECT COALESCE(name, raft_name, '') as r_name FROM rafts WHERE id = $1 LIMIT 1", array($raft_id));
+        if (!$raft_res || pg_num_rows($raft_res) === 0) {
+            $raft_res = @pg_query_params($conn, "SELECT COALESCE(name, raft_name, '') as r_name FROM rafts WHERE raft_id = $1 LIMIT 1", array($raft_id));
+        }
+        if ($raft_res && pg_num_rows($raft_res) > 0) {
+            $r_row = pg_fetch_assoc($raft_res);
+            $raft_name = $r_row['r_name'] ?? '';
+        }
+    }
+    $booking['raft_name'] = $raft_name;
+
     $default_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
 
-    // 3. จัดการโฟลเดอร์อัปโหลดสลิป
+    // 4. จัดการโฟลเดอร์อัปโหลดสลิป
     $target_dir = __DIR__ . "/uploads/slips/";
     if (!file_exists($target_dir)) { 
         if (!@mkdir($target_dir, 0755, true)) {
@@ -75,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
     $new_filename = "slip_" . $booking_id . "_" . time() . "." . $file_ext;
     $target_file = $target_dir . $new_filename;
 
-    // 4. ย้ายไฟล์ไปยังโฟลเดอร์ปลายทาง
+    // 5. ย้ายไฟล์ไปยังโฟลเดอร์ปลายทาง
     if (move_uploaded_file($_FILES["payment_slip"]["tmp_name"], $target_file)) {
         
         $payment_code = "PAY" . date('Ymd') . str_pad($booking_id, 4, '0', STR_PAD_LEFT);
@@ -88,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
                            : $default_price;
         $notes = "ธนาคาร/ช่องทางโอน: " . $bank_name;
 
-        // 5. บันทึกลงตาราง payments (ถ้ามีตาราง)
+        // 6. บันทึกลงตาราง payments (ถ้ามีตาราง)
         $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
         $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
 
@@ -110,7 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
             ));
         }
 
-        // 6. อัปเดตตาราง bookings
+        // 7. อัปเดตตาราง bookings
         $b_cols = [];
         $chk_b = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
         if ($chk_b) {
@@ -143,9 +153,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
             @pg_query_params($conn, $sql_up_b, $b_params);
         }
 
-        // 7. ส่งแจ้งเตือน LINE ไปหาแอดมินพร้อมรูปสลิป
+        // 8. ส่งแจ้งเตือน LINE ไปหาแอดมินพร้อมรูปสลิป
         $guest_name = !empty($booking['guest_name']) ? $booking['guest_name'] : 'ลูกค้า';
-        $raft_display = $booking['raft_name'] ?? ('แพ #' . ($booking['raft_id'] ?? ''));
+        $raft_display = !empty($booking['raft_name']) ? $booking['raft_name'] : ('แพ #' . $raft_id);
 
         $line_msg  = "💸 แจ้งโอนเงิน/แนบสลิปใหม่!\n";
         $line_msg .= "━━━━━━━━━━━━━━━━\n";
@@ -168,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         $slip_public_url = "$protocol://$host" . ($base_dir ? $base_dir : '') . "/uploads/slips/" . $new_filename;
 
         $line_access_token = 'jStaztWHf7QXNoCVTPhoqat7sCmK5HZp5GBJXrlUv+c9NMT26dzuAbalCnpxp53VSGoGBIU16cV5CSfyuKq4qpqbBv+Xd8ju3CTw3/sHfa3PpcS2RwYykgN3CqcJye6QEqexCW+w0MD8B9tF5w+FxAdB04t89/1O/w1cDnyilFU='; 
-        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID'; // ⚠️ อย่าลืมใส่ User ID หรือ Group ID ของแอดมิน
+        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID'; // ⚠️️ อย่าลืมใส่ User ID หรือ Group ID ของแอดมิน
 
         if (!empty($line_access_token) && $line_to_id !== 'YOUR_ADMIN_USER_OR_GROUP_ID') {
             $push_data = [
