@@ -23,7 +23,64 @@ $checkout_time   = '11:00';
 $guests          = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
 $search_keyword  = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// 3. ดึงข้อมูลแพว่างจากตาราง rafts (PostgreSQL แบบตรวจจับโครงสร้างตารางอัตโนมัติ)
+// ฟังก์ชันดึงรูปภาพแพแบบยืดหยุ่น ป้องกันพาธซ้ำและรองรับทุกคอลัมน์
+function get_raft_image_url($row) {
+    if (!is_array($row)) {
+        return "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+    }
+
+    // ลำดับคอลัมน์รูปภาพที่อาจมีในตาราง rafts
+    $image_fields = [
+        'featured_image', 'cover_image', 'image', 'raft_image',
+        'image_1', 'image_2', 'image_3', 'image_4', 'image_5',
+        'picture', 'photo', 'thumbnail', 'img'
+    ];
+
+    $possible_dirs = [
+        __DIR__ . '/uploads/',
+        __DIR__ . '/../uploads/'
+    ];
+
+    $candidate_file = '';
+
+    foreach ($image_fields as $field) {
+        if (!empty($row[$field])) {
+            $val = trim($row[$field]);
+            if (empty($val)) continue;
+
+            // กรณีเป็นลิงก์ภายนอก (http / https)
+            if (preg_match('/^https?:\/\//i', $val) || strpos($val, '//') === 0) {
+                return $val;
+            }
+
+            // ตัดคำว่า uploads/ หรือ /uploads/ ด้านหน้าออก เพื่อไม่ให้พาธซ้ำ
+            $clean_filename = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $val), '/');
+            if (empty($clean_filename)) continue;
+
+            // ตรวจสอบว่าไฟล์มีอยู่จริงในโฟลเดอร์ uploads หรือไม่
+            foreach ($possible_dirs as $dir) {
+                if (file_exists($dir . $clean_filename)) {
+                    return "uploads/" . $clean_filename;
+                }
+            }
+
+            // เก็บชื่อไฟล์แรกที่พบไว้เป็นตัวเลือกสำรอง
+            if (empty($candidate_file)) {
+                $candidate_file = "uploads/" . $clean_filename;
+            }
+        }
+    }
+
+    // หากมีชื่อไฟล์ในฐานข้อมูล ให้ลองส่งพาธออกไปแสดงผล
+    if (!empty($candidate_file)) {
+        return $candidate_file;
+    }
+
+    // รูปสำรองกรณีไม่มีการอัปโหลดรูป
+    return "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+}
+
+// 3. ดึงข้อมูลแพว่างจากตาราง rafts
 $rafts = [];
 if ($conn) {
     // 3.1 ตรวจสอบคอลัมน์ของตาราง rafts
@@ -47,7 +104,7 @@ if ($conn) {
     $params = [];
     $p_idx = 1;
 
-    // 🟢 แก้ไขจุดที่ 1: กรองเฉพาะแพที่ "ปิดปรับปรุง / ปิดซ่อมแซม" เท่านั้น (แพที่มีสถานะ pending หรือ available ต้องแสดงผลได้ตามปกติ)
+    // กรองเฉพาะแพที่ไม่ใช่สถานะปิดปรับปรุง
     $where_clauses = [
         "(r.status IS NULL OR TRIM(LOWER(r.status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0'))"
     ];
@@ -70,7 +127,7 @@ if ($conn) {
         }
     }
 
-    // 🟢 แก้ไขจุดที่ 2: ตรวจสอบคิวว่างเฉพาะ "วันที่ค้นหา ($checkin)" เท่านั้น
+    // ตรวจสอบคิวว่างในวันที่ค้นหา ($checkin)
     if (!empty($b_cols) && in_array('raft_id', $b_cols)) {
         $date_expr = null;
         if (in_array('check_in_date', $b_cols) && in_array('check_in', $b_cols)) {
@@ -91,7 +148,6 @@ if ($conn) {
             }
             $st_sql = !empty($st_filters) ? " AND (" . implode(" AND ", $st_filters) . ")" : "";
 
-            // ตรวจสอบว่าแพลำนี้ มีการจองที่ตรงกับวันที่ $checkin หรือไม่
             $where_clauses[] = "NOT EXISTS (
                 SELECT 1 FROM bookings b 
                 WHERE b.raft_id = r.id 
@@ -106,7 +162,7 @@ if ($conn) {
     $sql = "SELECT r.* FROM rafts r WHERE " . implode(" AND ", $where_clauses) . " ORDER BY r.id DESC";
     $result = !empty($params) ? @pg_query_params($conn, $sql, $params) : @pg_query($conn, $sql);
 
-    // ระบบสำรอง (Fallback): แสดงแพทุกลำที่ไม่ใช่แพปิดปรับปรุง
+    // Fallback: แสดงแพทุกลำที่ไม่ปิดปรับปรุงหากค้นหาไม่พบ
     if (!$result || pg_num_rows($result) === 0) {
         $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0')) ORDER BY id DESC";
         $result = @pg_query($conn, $fallback_sql);
@@ -124,7 +180,7 @@ if ($conn) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title> ล่องแพหนองกวาก</title>
+    <title>ล่องแพหนองกวาก</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
@@ -168,7 +224,6 @@ if ($conn) {
                     <span class="hidden sm:inline text-sm font-bold text-gray-600">👤 <?php echo htmlspecialchars($_SESSION['fullname'] ?? ''); ?></span>
                     <a href="logout.php" class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-xl text-[10px] md:text-xs transition font-bold shadow-lg shadow-red-100 btn-animate">ออกจากระบบ</a>
                 <?php else: ?>
-    
                     <a href="login.php" class="text-blue-600 px-2 md:px-3 py-2 rounded-lg font-bold hover:text-blue-800 transition text-[11px] md:text-sm">เจ้าหน้าที่</a>
                 <?php endif; ?>
             </div>
@@ -210,7 +265,6 @@ if ($conn) {
                             <i class="fa fa-users absolute left-4 top-1/2 -translate-y-1/2 text-blue-400 text-xs md:hidden"></i>
                             <select name="guests" class="w-full p-3 md:p-2 pl-10 md:pl-2 border-2 md:border-0 md:border-b-2 border-gray-100 md:border-gray-100 outline-none bg-white md:bg-transparent font-bold appearance-none rounded-xl md:rounded-none transition-all">
                                 <option value="2" <?php if($guests<=2) echo 'selected'; ?>>1-15 ท่าน</option>
-
                             </select>
                         </div>
                     </div>
@@ -237,32 +291,20 @@ if ($conn) {
             <?php
             if (!empty($rafts)):
                 foreach ($rafts as $row):
-                    $raft_id = $row['id'];
+                    $raft_id   = $row['id'];
                     $raft_name = htmlspecialchars($row['name']);
-                    
-                    $displayImg = "";
-                    $target_dir = __DIR__ . "/uploads/";
-
-                    if (!empty($row['featured_image']) && file_exists($target_dir . $row['featured_image'])) {
-                        $displayImg = "uploads/" . $row['featured_image'];
-                    } else {
-                        for ($i = 1; $i <= 5; $i++) {
-                            $img_col = "image_" . $i;
-                            if (!empty($row[$img_col]) && file_exists($target_dir . $row[$img_col])) {
-                                $displayImg = "uploads/" . $row[$img_col];
-                                break;
-                            }
-                        }
-                    }
-
-                    if (empty($displayImg)) {
-                        $displayImg = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
-                    }
+                    $displayImg = get_raft_image_url($row);
             ?>
                 <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo $checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo $checkout_time; ?>" 
                    class="group bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-sm hover:shadow-2xl transition duration-500 overflow-hidden border border-gray-100 flex flex-col h-full">
+                    
+                    <!-- ส่วนแสดงรูปภาพแพ -->
                     <div class="relative h-60 md:h-72 overflow-hidden bg-gray-100">
-                        <img src="<?php echo $displayImg; ?>" alt="<?php echo $raft_name; ?>" class="h-full w-full object-cover transition duration-700 group-hover:scale-110">
+                        <img src="<?php echo htmlspecialchars($displayImg); ?>" 
+                             alt="<?php echo $raft_name; ?>" 
+                             class="h-full w-full object-cover transition duration-700 group-hover:scale-110"
+                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
+                        
                         <div class="absolute top-4 left-4 md:top-6 md:left-6">
                             <span class="bg-emerald-500/90 backdrop-blur-md text-white px-3 py-1.5 md:px-4 md:py-2 rounded-full text-[9px] md:text-[10px] font-black uppercase tracking-widest shadow-sm">
                                 <i class="fa fa-check-circle mr-1"></i> ว่าง
@@ -273,13 +315,13 @@ if ($conn) {
                     <div class="p-6 md:p-8 flex flex-col flex-grow text-left">
                         <div class="flex justify-between items-start mb-2 md:mb-3">
                             <h4 class="text-xl md:text-2xl font-black text-gray-800 group-hover:text-blue-600 transition truncate pr-2"><?php echo $raft_name; ?></h4>
-                            <span class="text-emerald-600 font-black text-lg md:text-xl shrink-0">฿<?php echo number_format($row['price_per_day']); ?></span>
+                            <span class="text-emerald-600 font-black text-lg md:text-xl shrink-0">฿<?php echo number_format($row['price_per_day'] ?? 0); ?></span>
                         </div>
                         <p class="text-gray-400 text-xs md:text-sm mb-6 line-clamp-2 leading-relaxed h-10 md:h-11"><?php echo htmlspecialchars($row['description'] ?: 'ไม่มีรายละเอียดเพิ่มเติม'); ?></p>
                         
                         <div class="mt-auto pt-4 md:pt-6 border-t border-gray-50 flex items-center justify-between">
                             <div class="flex items-center space-x-3 md:space-x-4 text-gray-400 font-bold text-[10px] md:text-xs uppercase">
-                                <span><i class="fa fa-users text-blue-400 mr-1"></i> <?php echo $row['capacity']; ?> ท่าน</span>
+                                <span><i class="fa fa-users text-blue-400 mr-1"></i> <?php echo $row['capacity'] ?? 0; ?> ท่าน</span>
                                 <span><i class="fa fa-star text-yellow-400 mr-1"></i> 4.9</span>
                             </div>
                             
@@ -301,7 +343,7 @@ if ($conn) {
         </div>
     </main>
 
-    <!-- ส่วนหน้าแอดไลน์ร้านค้า (Official LINE Section) -->
+    <!-- ส่วน LINE Official -->
     <section class="container mx-auto px-6 mb-16">
         <div class="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-[2.5rem] p-8 md:p-12 text-white shadow-2xl relative overflow-hidden">
             <div class="absolute -right-16 -bottom-16 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
@@ -373,7 +415,7 @@ if ($conn) {
         </div>
     </footer>
 
-    <!-- ปุ่มลอย LINE (Floating Action Button) มุมขวาล่าง -->
+    <!-- ปุ่มลอย LINE -->
     <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" 
        class="fixed bottom-6 right-6 z-50 bg-[#06C755] hover:bg-[#05b04b] text-white p-4 rounded-full shadow-2xl flex items-center justify-center gap-2 group transition-all duration-300 hover:pr-6 hover:shadow-emerald-300 hover:-translate-y-1">
         <i class="fab fa-line text-3xl"></i>
