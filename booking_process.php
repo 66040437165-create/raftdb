@@ -8,7 +8,7 @@ if (file_exists(__DIR__ . '/db_config.php')) {
     require_once __DIR__ . '/../db_config.php';
 }
 
-// 🟢 โหลดไฟล์ line_helper.php สำหรับส่งแจ้งเตือน LINE
+// โหลดไฟล์ line_helper.php สำหรับส่งแจ้งเตือน LINE
 if (file_exists(__DIR__ . '/line_helper.php')) {
     require_once __DIR__ . '/line_helper.php';
 } elseif (file_exists(__DIR__ . '/../line_helper.php')) {
@@ -170,6 +170,23 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $insert_values[] = '$' . $p_idx++;
         $params[] = $customer_id;
     }
+    // user_id (ถ้ามีผู้ใช้ล็อกอินอยู่)
+    if (in_array('user_id', $b_cols) && !empty($_SESSION['user_id'])) {
+        $insert_fields[] = "user_id";
+        $insert_values[] = '$' . $p_idx++;
+        $params[] = (int)$_SESSION['user_id'];
+    }
+    // line_user_id หรือ line_id (เก็บไว้ใช้อ้างอิงส่งแจ้งเตือนภายหลัง)
+    $sess_line_id = $_SESSION['line_user_id'] ?? $_SESSION['user_line_id'] ?? null;
+    if (in_array('line_user_id', $b_cols) && !empty($sess_line_id)) {
+        $insert_fields[] = "line_user_id";
+        $insert_values[] = '$' . $p_idx++;
+        $params[] = $sess_line_id;
+    } elseif (in_array('line_id', $b_cols) && !empty($sess_line_id)) {
+        $insert_fields[] = "line_id";
+        $insert_values[] = '$' . $p_idx++;
+        $params[] = $sess_line_id;
+    }
     // raft_id
     if (in_array('raft_id', $b_cols)) {
         $insert_fields[] = "raft_id";
@@ -273,8 +290,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         // อัปเดตสถานะแพให้เป็น 'รอตรวจสอบ' (pending)
         @pg_query_params($conn, "UPDATE rafts SET status = 'pending' WHERE id = $1", array($raft_id));
 
-        // 🟢 4. ส่งข้อความแจ้งเตือนทาง LINE
+        // 4. ส่งข้อความแจ้งเตือนทาง LINE
         if (function_exists('send_line_message')) {
+            // ดึง Domain สำหรับสร้าง Link
+            $site_host = $_SERVER['HTTP_HOST'] ?? 'raftdb.onrender.com';
+
             // 4.1 ข้อความแจ้งเตือนสำหรับ "แอดมิน"
             $admin_msg  = "🔔 มีรายการจองแพใหม่!\n";
             $admin_msg .= "━━━━━━━━━━━━━━━━\n";
@@ -286,7 +306,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $admin_msg .= "⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n";
             $admin_msg .= "💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n";
             $admin_msg .= "━━━━━━━━━━━━━━━━\n";
-            $admin_msg .= "👉 ตรวจสอบและกดยืนยันในระบบหลังบ้าน";
+            $admin_msg .= "👉 ตรวจสอบในระบบหลังบ้าน: https://{$site_host}/admin_dashboard.php";
 
             // ยิงแจ้งเตือนหาแอดมิน
             if (defined('LINE_ADMIN_USER_ID')) {
@@ -296,15 +316,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             // 4.2 ข้อความยืนยันสำหรับ "ลูกค้า" (กรณีลูกค้าล็อกอินผ่าน LINE)
             $customer_line_id = $_SESSION['line_user_id'] ?? $_SESSION['user_line_id'] ?? null;
             if (!empty($customer_line_id)) {
-                $customer_msg  = "🎉 ขอบคุณที่จอง ล่องแพหนองกวาก!\n";
+                $customer_msg  = "🎉 ขอบคุณสำหรับการจอง ล่องแพหนองกวาก!\n";
                 $customer_msg .= "━━━━━━━━━━━━━━━━\n";
                 $customer_msg .= "📋 รหัสการจอง: {$booking_code}\n";
-                $customer_msg .= "⛵ แพที่คุณเลือก: {$raft_name}\n";
+                $customer_msg .= "⛵ แพที่จอง: {$raft_name}\n";
                 $customer_msg .= "📅 วันที่เข้าพัก: " . date('d/m/Y', strtotime($check_in_date)) . "\n";
                 $customer_msg .= "⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n";
                 $customer_msg .= "💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n";
                 $customer_msg .= "━━━━━━━━━━━━━━━━\n";
-                $customer_msg .= "กรุณาแนบหลักฐานการชำระเงินผ่านหน้าเว็บเพื่อยืนยันคิวของคุณครับ";
+                $customer_msg .= "💳 บัญชีโอนเงิน: ธ.กสิกรไทย 012-3-45678-9\n";
+                $customer_msg .= "โปรดแนบสลิปเพื่อยืนยันคิวของคุณครับ 👇\n";
+                $customer_msg .= "https://{$site_host}/booking_success.php?id={$booking_id}";
 
                 send_line_message($customer_line_id, $customer_msg);
             }
