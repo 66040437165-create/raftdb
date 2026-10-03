@@ -1,6 +1,11 @@
 <?php 
 session_start();
-require_once __DIR__ . '/db_config.php';
+
+if (file_exists(__DIR__ . '/db_config.php')) {
+    require_once __DIR__ . '/db_config.php';
+} else {
+    require_once __DIR__ . '/../db_config.php';
+}
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
@@ -8,6 +13,56 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $error_msg = "";
+
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 อัตโนมัติ (ป้องกันรูปหายบน Render 100%)
+function convert_image_to_base64($tmp_file, $max_width = 1000) {
+    if (!file_exists($tmp_file)) return '';
+
+    // ตรวจสอบข้อมูลรูปภาพ
+    $image_info = @getimagesize($tmp_file);
+    if ($image_info && function_exists('imagecreatefromstring')) {
+        $width  = $image_info[0];
+        $height = $image_info[1];
+        $mime   = $image_info['mime'];
+
+        $data = file_get_contents($tmp_file);
+        $src_img = @imagecreatefromstring($data);
+
+        if ($src_img) {
+            // ย่อขนาดถ้ารูปกว้างเกิน $max_width
+            if ($width > $max_width) {
+                $new_width  = $max_width;
+                $new_height = intval($height * ($max_width / $width));
+                $dst_img    = imagecreatetruecolor($new_width, $new_height);
+
+                // รองรับพื้นหลังโปร่งใส (PNG / WEBP)
+                if ($mime === 'image/png' || $mime === 'image/webp') {
+                    imagealphablending($dst_img, false);
+                    imagesavealpha($dst_img, true);
+                    $transparent = imagecolorallocatealpha($dst_img, 255, 255, 255, 127);
+                    imagefilledrectangle($dst_img, 0, 0, $new_width, $new_height, $transparent);
+                }
+
+                imagecopyresampled($dst_img, $src_img, 0, 0, 0, 0, $new_width, $new_height, $width, $height);
+                imagedestroy($src_img);
+                $src_img = $dst_img;
+            }
+
+            // บีบอัดเป็น JPG คุณภาพ 80% เพื่อให้ไฟล์เบา
+            ob_start();
+            imagejpeg($src_img, null, 80);
+            $compressed_data = ob_get_clean();
+            imagedestroy($src_img);
+
+            return 'data:image/jpeg;base64,' . base64_encode($compressed_data);
+        }
+    }
+
+    // กรณีเซิร์ฟเวอร์ไม่มี GD ให้แปลงตรงๆ
+    $raw_data = file_get_contents($tmp_file);
+    $mime_type = mime_content_type($tmp_file) ?: 'image/jpeg';
+    return 'data:' . $mime_type . ';base64,' . base64_encode($raw_data);
+}
 
 // ดึงรายการประเภทแพสำหรับใส่ Dropdown (PostgreSQL)
 $raft_types = [];
@@ -36,40 +91,32 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     if (!empty($name) && $raft_type_id > 0 && $capacity > 0 && $price_day > 0) {
         
-        $target_dir = "uploads/";
-        if (!is_dir($target_dir)) { 
-            @mkdir($target_dir, 0777, true); 
-        }
-
         $featured_image = "";
         $images = ['', '', '', '', '']; // เตรียมพื้นที่สำหรับ image_1 ถึง image_5
         $img_index = 0;
 
-        // 1. ตรวจสอบกรณีผู้ใช้แปะเป็น URL ลิงก์รูปภาพ (ป้องกันรูปหายบน Render)
+        // 1. ตรวจสอบกรณีผู้ใช้แปะเป็น URL ลิงก์รูปภาพ
         if (!empty($image_url_opt)) {
             $featured_image = $image_url_opt;
             $images[0] = $image_url_opt;
             $img_index = 1;
         }
 
-        // 2. จัดการอัปโหลดรูปภาพผ่านไฟล์ปกติ
+        // 2. จัดการรูปภาพที่อัปโหลดจากเครื่อง -> แปลงเป็น Base64 เก็บลง DB ถาวร
         if (!empty($_FILES['raft_images']['name'][0])) {
             foreach ($_FILES['raft_images']['name'] as $key => $val) {
                 if ($img_index >= 5) break; // จำกัดสูงสุด 5 รูป
                 
                 if (isset($_FILES['raft_images']['error'][$key]) && $_FILES['raft_images']['error'][$key] === 0) {
-                    $file_ext = strtolower(pathinfo($_FILES["raft_images"]["name"][$key], PATHINFO_EXTENSION));
-                    if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
-                        $image_name = "raft_" . time() . "_" . rand(100, 999) . "." . $file_ext;
-                        $target_file = $target_dir . $image_name;
+                    $tmp_file = $_FILES["raft_images"]["tmp_name"][$key];
+                    $image_base64 = convert_image_to_base64($tmp_file);
 
-                        if (move_uploaded_file($_FILES["raft_images"]["tmp_name"][$key], $target_file)) {
-                            if (empty($featured_image)) {
-                                $featured_image = $image_name; // รูปแรกเป็นรูปหลัก
-                            }
-                            $images[$img_index] = $image_name;
-                            $img_index++;
+                    if (!empty($image_base64)) {
+                        if (empty($featured_image)) {
+                            $featured_image = $image_base64; // รูปแรกเป็นรูปหลัก
                         }
+                        $images[$img_index] = $image_base64;
+                        $img_index++;
                     }
                 }
             }
@@ -208,11 +255,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     <!-- ส่วนอัปโหลดรูปภาพ -->
                     <div class="border-t border-slate-100 pt-4">
-                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">1. ลิงก์ URL รูปภาพหลัก (แนะนำบน Render ไม่หาย 100%)</label>
-                        <input type="url" name="image_url" placeholder="https://example.com/image.jpg หรือลิงก์จากเน็ต"
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">1. ลิงก์ URL รูปภาพหลัก (ถ้ามี)</label>
+                        <input type="url" name="image_url" placeholder="https://example.com/image.jpg หรือลิงก์รูปภาพ"
                                class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 font-bold placeholder:text-slate-300 transition text-sm mb-4">
 
-                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">2. หรือเลือกอัปโหลดไฟล์จากเครื่อง (สูงสุด 5 รูป)</label>
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">2. เลือกอัปโหลดไฟล์จากเครื่อง (สูงสุด 5 รูป - รูปจะไม่หายแม้เซิร์ฟเวอร์ Restart)</label>
                         <div class="flex items-center justify-center w-full">
                             <label class="flex flex-col items-center justify-center w-full h-36 border-2 border-slate-200 border-dashed rounded-[2rem] cursor-pointer bg-slate-50 hover:bg-blue-50 transition p-6 text-center">
                                 <div class="flex flex-col items-center justify-center">
