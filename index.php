@@ -23,60 +23,61 @@ $checkout_time   = '11:00';
 $guests          = isset($_GET['guests']) ? intval($_GET['guests']) : 2;
 $search_keyword  = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// 3. ฟังก์ชันดึงรูปภาพตรงตามข้อมูลในตารางแพ (rafts) แต่ละลำ
+// 3. ฟังก์ชันดึงรูปภาพประจำแพ (รองรับ Base64, URL เต็ม และไฟล์ในเครื่อง)
 function get_raft_image_url($row) {
-    $default_placeholder = "https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80";
+    $default_placeholder = "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=80";
 
     if (!is_array($row)) {
         return $default_placeholder;
     }
 
-    $raft_id = $row['id'] ?? '';
     $raw_image = '';
-
-    // ลำดับคอลัมน์รูปภาพในตาราง rafts
     $image_fields = [
         'featured_image', 'cover_image', 'image', 'raft_image',
         'image_1', 'image_2', 'image_3', 'image_4', 'image_5',
-        'picture', 'photo', 'thumbnail', 'img', 'file_name'
+        'picture', 'photo', 'thumbnail', 'img'
     ];
 
-    // ตรวจสอบจากคอลัมน์มาตรฐาน
+    // ค้นหาคอลัมน์รูปภาพที่มีข้อมูล
     foreach ($image_fields as $field) {
         if (!empty($row[$field])) {
-            $raw_image = trim($row[$field]);
-            break;
-        }
-    }
-
-    // หากไม่พบคอลัมน์ข้างต้น ให้สแกนหาคอลัมน์ใดๆ ที่มีชื่อสื่อถึงรูปภาพ
-    if (empty($raw_image)) {
-        foreach ($row as $k => $v) {
-            $k_lower = strtolower($k);
-            if ((strpos($k_lower, 'image') !== false || strpos($k_lower, 'img') !== false || strpos($k_lower, 'photo') !== false || strpos($k_lower, 'pic') !== false) && !empty($v)) {
-                $raw_image = trim($v);
+            $val = trim($row[$field]);
+            if (!empty($val)) {
+                $raw_image = $val;
                 break;
             }
         }
     }
 
-    // กรณีพบชื่อรูปหรือพาธในแถวของแพลำนี้
+    // หากไม่พบในคอลัมน์มาตรฐาน ให้ตรวจหาคอลัมน์ที่มีคำเกี่ยวกับรูปภาพ
+    if (empty($raw_image)) {
+        foreach ($row as $k => $v) {
+            $k_lower = strtolower($k);
+            if ((strpos($k_lower, 'image') !== false || strpos($k_lower, 'img') !== false || strpos($k_lower, 'photo') !== false || strpos($k_lower, 'pic') !== false) && !empty($v)) {
+                $val = trim($v);
+                if (!empty($val)) {
+                    $raw_image = $val;
+                    break;
+                }
+            }
+        }
+    }
+
     if (!empty($raw_image)) {
-        // หากเป็น URL เต็ม (http / https)
-        if (preg_match('/^https?:\/\//i', $raw_image) || strpos($raw_image, '//') === 0) {
+        // 🟢 ตรวจสอบหากเป็น Base64 หรือ Full URL ให้ส่งออกทันที (ห้ามเติม uploads/)
+        if (strpos($raw_image, 'data:image/') === 0 || preg_match('/^(https?:\/\/|\/\/)/i', $raw_image)) {
             return $raw_image;
         }
 
-        // ตัด path uploads/ หรือ ../ ด้านหน้าออกเพื่อป้องกันพาธซ้ำ
+        // กรณีเป็นชื่อไฟล์ ตัด path uploads/ ข้างหน้าออก
         $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $raw_image), '/');
         $dir = __DIR__ . '/uploads/';
 
-        // ค้นหาไฟล์ในโฟลเดอร์ uploads (ตรงตัว)
         if (is_dir($dir) && file_exists($dir . $clean_name)) {
             return 'uploads/' . $clean_name;
         }
 
-        // ค้นหาแบบ Case-Insensitive (รองรับตัวพิมพ์เล็ก-ใหญ่บน Render Linux)
+        // ค้นหาแบบ Case-Insensitive บน Linux
         if (is_dir($dir)) {
             $target_lower = strtolower($clean_name);
             $files = @scandir($dir);
@@ -89,11 +90,11 @@ function get_raft_image_url($row) {
             }
         }
 
-        // ส่งพาธตามที่บันทึกไว้ในฐานข้อมูลออกไป
         return 'uploads/' . $clean_name;
     }
 
-    // กรณีตารางแพไม่มีการบันทึกชื่อไฟล์ ให้ตรวจสอบไฟล์ตาม ID แพ เช่น raft_2.jpg หรือ 2.jpg
+    // กรณีแพไม่มีรูป ให้ค้นหารูปตาม ID แพ เช่น raft_1.jpg หรือ 1.jpg
+    $raft_id = $row['id'] ?? '';
     if (!empty($raft_id)) {
         $extensions = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'JPEG', 'PNG'];
         foreach ($extensions as $ext) {
@@ -106,28 +107,37 @@ function get_raft_image_url($row) {
         }
     }
 
-    // หากแพลำนี้ไม่มีรูปจริง ให้แสดงรูปภาพวิวมาตรฐาน (ไม่ดึงรูปซุ้มประตูมาปน)
     return $default_placeholder;
 }
 
-// ค้นหารูปพื้นหลัง Hero (ซุ้มประตู)
-$hero_bg_file = 'uploads/S__12296202.jpg';
-if (!file_exists(__DIR__ . '/' . $hero_bg_file)) {
-    $dir = __DIR__ . '/uploads/';
-    if (is_dir($dir)) {
-        $files = @scandir($dir);
-        if ($files !== false) {
-            foreach ($files as $file) {
-                if (strtolower($file) === 's__12296202.jpg') {
-                    $hero_bg_file = 'uploads/' . $file;
-                    break;
-                }
+// 4. จัดการรูปภาพพื้นหลังส่วนหัว (Hero Banner) ให้แสดงผลเสมอ
+$hero_bg_file = '';
+$dir_up = __DIR__ . '/uploads/';
+$possible_heroes = ['S__12296202.jpg', 's__12296202.jpg', 'banner.jpg', 'hero.jpg', 'cover.jpg'];
+
+if (is_dir($dir_up)) {
+    $scanned = @scandir($dir_up);
+    if ($scanned !== false) {
+        foreach ($scanned as $f) {
+            if (in_array(strtolower($f), array_map('strtolower', $possible_heroes))) {
+                $hero_bg_file = 'uploads/' . $f;
+                break;
             }
         }
     }
 }
 
-// 4. ดึงข้อมูลแพว่างจากตาราง rafts
+// หากไม่พบไฟล์ตามชื่อ ให้ดึงรูปแรกที่มีในโฟลเดอร์ uploads
+if (empty($hero_bg_file) || !file_exists(__DIR__ . '/' . $hero_bg_file)) {
+    $all_up = @glob(__DIR__ . '/uploads/*.{jpg,jpeg,png,webp,JPG,JPEG,PNG,WEBP}', GLOB_BRACE);
+    if (!empty($all_up)) {
+        $hero_bg_file = 'uploads/' . basename($all_up[0]);
+    } else {
+        $hero_bg_file = 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1600&q=80';
+    }
+}
+
+// 5. ดึงข้อมูลแพว่างจากตาราง rafts
 $rafts = [];
 if ($conn) {
     $r_cols = [];
@@ -234,7 +244,7 @@ if ($conn) {
             .glass-effect { background: rgba(255, 255, 255, 0.98); }
         }
         .hero-bg {
-            background-image: linear-gradient(to bottom, rgba(15, 23, 42, 0.4), rgba(15, 23, 42, 0.7)), 
+            background-image: linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), 
                               url('<?php echo htmlspecialchars($hero_bg_file); ?>');
             background-size: cover;
             background-position: center;
@@ -339,12 +349,12 @@ if ($conn) {
                 <a href="booking.php?raft_id=<?php echo $raft_id; ?>&checkin=<?php echo $checkin; ?>&checkin_time=<?php echo $checkin_time; ?>&checkout=<?php echo $checkout; ?>&checkout_time=<?php echo $checkout_time; ?>" 
                    class="group bg-white rounded-[2rem] md:rounded-[2.5rem] shadow-sm hover:shadow-2xl transition duration-500 overflow-hidden border border-gray-100 flex flex-col h-full">
                     
-                    <!-- ส่วนแสดงรูปภาพแพประจำลำ -->
+                    <!-- ส่วนแสดงรูปภาพแพ -->
                     <div class="relative h-60 md:h-72 overflow-hidden bg-gray-100">
                         <img src="<?php echo htmlspecialchars($displayImg); ?>" 
                              alt="<?php echo $raft_name; ?>" 
                              class="h-full w-full object-cover transition duration-700 group-hover:scale-110"
-                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
+                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=80';">
                         
                         <div class="absolute top-4 left-4 md:top-6 md:left-6">
                             <span class="bg-emerald-500/90 backdrop-blur-md text-white px-3 py-1.5 md:px-4 md:py-2 rounded-full text-[9px] md:text-[10px] font-black uppercase tracking-widest shadow-sm">
