@@ -51,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_employee'])) {
     $full_name = trim($_POST['full_name']);
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id']);
-    $is_active = intval($_POST['is_active']);
+   $role_id = $_POST['role_id'] ?? 2; // กำหนดค่าเริ่มต้นเป็น 2 (หรือค่า default ของระบบคุณ)
+$is_active = $_POST['is_active'] ?? 1; // กำหนดค่าเริ่มต้นเป็น 1
     $password  = trim($_POST['password']);
 
     // หากแอดมินแก้ไขข้อมูลของตนเอง ห้ามเปลี่ยนบทบาทและห้ามระงับบัญชีตนเอง
