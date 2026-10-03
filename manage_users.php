@@ -1,10 +1,13 @@
 <?php
+// เปิด Output Buffering ป้องกันปัญหา Cannot modify header information
+ob_start();
+
 // บังคับแสดง Error เพื่อความสะดวกในการตรวจสอบ
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 session_start();
-require_once __DIR__ . '/db_config.php'; // แก้ไขเป็นแบบนี้ครับ
+require_once __DIR__ . '/db_config.php';
 
 // 1. ตรวจสอบสิทธิ์: ต้องล็อกอินและเป็น Admin (role_id = 1) เท่านั้น
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
@@ -19,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_employee'])) {
     $full_name = trim($_POST['full_name']);
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id']); // 1 = Admin/ผู้จัดการ, 2 = พนักงานทั่วไป
+    $role_id   = intval($_POST['role_id'] ?? 2); // 1 = Admin/ผู้จัดการ, 2 = พนักงานทั่วไป
     $is_active = isset($_POST['is_active']) ? intval($_POST['is_active']) : 1;
 
     // ตรวจสอบ username ซ้ำ (PostgreSQL)
@@ -51,9 +54,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_employee'])) {
     $full_name = trim($_POST['full_name']);
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-   $role_id = $_POST['role_id'] ?? 2; // กำหนดค่าเริ่มต้นเป็น 2 (หรือค่า default ของระบบคุณ)
-$is_active = $_POST['is_active'] ?? 1; // กำหนดค่าเริ่มต้นเป็น 1
-    $password  = trim($_POST['password']);
+    $role_id   = intval($_POST['role_id'] ?? 2);
+    $is_active = intval($_POST['is_active'] ?? 1);
+    $password  = trim($_POST['password'] ?? '');
 
     // หากแอดมินแก้ไขข้อมูลของตนเอง ห้ามเปลี่ยนบทบาทและห้ามระงับบัญชีตนเอง
     if ($emp_id === (int)$_SESSION['user_id']) {
@@ -373,17 +376,17 @@ if ($result) {
             document.getElementById('edit_role_id').value = emp.role_id;
             document.getElementById('edit_is_active').value = emp.is_active;
             
-            // กรณีเป็นบัญชีของแอดมินคนปัจจุบัน ล็อกไม่ให้เปลี่ยน role_id และ is_active ของตนเอง
             const currentUserId = <?php echo (int)$_SESSION['user_id']; ?>;
             const roleSelect = document.getElementById('edit_role_id');
             const activeSelect = document.getElementById('edit_is_active');
             
+            // กรณีแก้ไขบัญชีตัวเอง ใช้การจางตัวเลือกเพื่อไม่ให้ปรับแก้ แต่ไม่ใช้ .disabled (เพื่อให้ส่งค่า Form ไปยัง PHP ได้)
             if (parseInt(emp.id) === currentUserId) {
-                roleSelect.disabled = true;
-                activeSelect.disabled = true;
+                roleSelect.classList.add('pointer-events-none', 'bg-slate-100', 'text-slate-400');
+                activeSelect.classList.add('pointer-events-none', 'bg-slate-100', 'text-slate-400');
             } else {
-                roleSelect.disabled = false;
-                activeSelect.disabled = false;
+                roleSelect.classList.remove('pointer-events-none', 'bg-slate-100', 'text-slate-400');
+                activeSelect.classList.remove('pointer-events-none', 'bg-slate-100', 'text-slate-400');
             }
 
             document.getElementById('editEmpModal').classList.remove('hidden');
