@@ -1,13 +1,6 @@
 <?php
-// เปิด Output Buffering ป้องกันปัญหา Cannot modify header information
-ob_start();
-
-// บังคับแสดง Error เพื่อความสะดวกในการตรวจสอบ
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
 session_start();
-require_once __DIR__ . '/db_config.php';
+require_once __DIR__ . '/../db_config.php';
 
 // 1. ตรวจสอบสิทธิ์: ต้องล็อกอินและเป็น Admin (role_id = 1) เท่านั้น
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
@@ -17,71 +10,74 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSI
 
 // 2. ระบบเพิ่มพนักงานใหม่
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_employee'])) {
-    $username  = trim($_POST['username']);
-    $password  = trim($_POST['password']);
-    $full_name = trim($_POST['full_name']);
+    $username  = trim($_POST['username'] ?? '');
+    $password  = trim($_POST['password'] ?? '');
+    $full_name = trim($_POST['full_name'] ?? '');
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id'] ?? 2); // 1 = Admin/ผู้จัดการ, 2 = พนักงานทั่วไป
+    $role_id   = intval($_POST['role_id'] ?? 2);
     $is_active = isset($_POST['is_active']) ? intval($_POST['is_active']) : 1;
 
-    // ตรวจสอบ username ซ้ำ (PostgreSQL)
-    $chk_query = "SELECT id FROM employees WHERE username = $1 LIMIT 1";
-    $chk_res = @pg_query_params($conn, $chk_query, array($username));
-
-    if ($chk_res && pg_num_rows($chk_res) > 0) {
+    // ตรวจสอบ username ซ้ำ
+    $chk = $conn->prepare("SELECT id FROM employees WHERE username = ? LIMIT 1");
+    $chk->bind_param("s", $username);
+    $chk->execute();
+    if ($chk->get_result()->num_rows > 0) {
+        $chk->close();
         header("Location: manage_users.php?msg=duplicate");
         exit();
     }
+    $chk->close();
 
     // เข้ารหัสรหัสผ่าน (Hash)
     $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-    $insert_query = "INSERT INTO employees (username, password, full_name, email, phone, role_id, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)";
-    $insert_res = @pg_query_params($conn, $insert_query, array($username, $hashed_password, $full_name, $email, $phone, $role_id, $is_active));
-
-    if ($insert_res) {
+    $stmt = $conn->prepare("INSERT INTO employees (username, password, full_name, email, phone, role_id, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    $stmt->bind_param("sssssii", $username, $hashed_password, $full_name, $email, $phone, $role_id, $is_active);
+    
+    if ($stmt->execute()) {
         header("Location: manage_users.php?msg=added");
     } else {
         header("Location: manage_users.php?msg=error");
     }
+    $stmt->close();
     exit();
 }
 
 // 3. ระบบแก้ไขข้อมูลและบทบาทพนักงาน
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_employee'])) {
     $emp_id    = intval($_POST['emp_id']);
-    $full_name = trim($_POST['full_name']);
+    $full_name = trim($_POST['full_name'] ?? '');
     $email     = trim($_POST['email'] ?? '');
     $phone     = trim($_POST['phone'] ?? '');
-    $role_id   = intval($_POST['role_id'] ?? 2);
-    $is_active = intval($_POST['is_active'] ?? 1);
     $password  = trim($_POST['password'] ?? '');
 
     // หากแอดมินแก้ไขข้อมูลของตนเอง ห้ามเปลี่ยนบทบาทและห้ามระงับบัญชีตนเอง
     if ($emp_id === (int)$_SESSION['user_id']) {
         $role_id   = 1;
         $is_active = 1;
+    } else {
+        $role_id   = intval($_POST['role_id'] ?? 2);
+        $is_active = intval($_POST['is_active'] ?? 1);
     }
 
     if (!empty($password)) {
         // กรณีมีการตั้งรหัสผ่านใหม่
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $update_query = "UPDATE employees SET full_name = $1, email = $2, phone = $3, role_id = $4, is_active = $5, password = $6 WHERE id = $7";
-        $params = array($full_name, $email, $phone, $role_id, $is_active, $hashed_password, $emp_id);
+        $stmt = $conn->prepare("UPDATE employees SET full_name = ?, email = ?, phone = ?, role_id = ?, is_active = ?, password = ? WHERE id = ?");
+        $stmt->bind_param("sssiisi", $full_name, $email, $phone, $role_id, $is_active, $hashed_password, $emp_id);
     } else {
         // กรณีไม่เปลี่ยนรหัสผ่าน
-        $update_query = "UPDATE employees SET full_name = $1, email = $2, phone = $3, role_id = $4, is_active = $5 WHERE id = $6";
-        $params = array($full_name, $email, $phone, $role_id, $is_active, $emp_id);
+        $stmt = $conn->prepare("UPDATE employees SET full_name = ?, email = ?, phone = ?, role_id = ?, is_active = ? WHERE id = ?");
+        $stmt->bind_param("sssiii", $full_name, $email, $phone, $role_id, $is_active, $emp_id);
     }
 
-    $update_res = @pg_query_params($conn, $update_query, $params);
-
-    if ($update_res) {
+    if ($stmt->execute()) {
         header("Location: manage_users.php?msg=updated");
     } else {
         header("Location: manage_users.php?msg=error");
     }
+    $stmt->close();
     exit();
 }
 
@@ -93,26 +89,21 @@ if (isset($_GET['delete_id'])) {
     if ($delete_id === (int)$_SESSION['user_id']) {
         header("Location: manage_users.php?msg=error_self");
     } else {
-        $delete_query = "DELETE FROM employees WHERE id = $1";
-        $del_res = @pg_query_params($conn, $delete_query, array($delete_id));
-        if ($del_res) {
+        $stmt = $conn->prepare("DELETE FROM employees WHERE id = ?");
+        $stmt->bind_param("i", $delete_id);
+        if ($stmt->execute()) {
             header("Location: manage_users.php?msg=deleted");
         } else {
             header("Location: manage_users.php?msg=error");
         }
+        $stmt->close();
     }
     exit();
 }
 
-// 5. ดึงข้อมูลพนักงานทั้งหมด (PostgreSQL)
+// 5. ดึงข้อมูลพนักงานทั้งหมด
 $sql = "SELECT id, username, full_name, email, phone, role_id, is_active, last_login FROM employees ORDER BY role_id ASC, id DESC";
-$result = @pg_query($conn, $sql);
-$employees = array();
-if ($result) {
-    while ($row = pg_fetch_assoc($result)) {
-        $employees[] = $row;
-    }
-}
+$result = $conn->query($sql);
 ?>
 
 <!DOCTYPE html>
@@ -181,12 +172,12 @@ if ($result) {
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-50">
-                            <?php if(!empty($employees)): foreach($employees as $row): ?>
+                            <?php if($result && $result->num_rows > 0): while($row = $result->fetch_assoc()): ?>
                             <tr class="hover:bg-slate-50/50 transition duration-300">
                                 <td class="p-6 pl-10">
                                     <div class="flex items-center gap-4">
-                                        <div class="w-10 h-10 <?php echo (int)$row['role_id'] == 1 ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'; ?> rounded-xl flex items-center justify-center font-bold">
-                                            <i class="fa <?php echo (int)$row['role_id'] == 1 ? 'fa-user-shield' : 'fa-user'; ?>"></i>
+                                        <div class="w-10 h-10 <?php echo $row['role_id'] == 1 ? 'bg-amber-100 text-amber-600' : 'bg-blue-100 text-blue-600'; ?> rounded-xl flex items-center justify-center font-bold">
+                                            <i class="fa <?php echo $row['role_id'] == 1 ? 'fa-user-shield' : 'fa-user'; ?>"></i>
                                         </div>
                                         <div>
                                             <p class="font-black text-slate-800"><?php echo htmlspecialchars($row['full_name']); ?></p>
@@ -201,9 +192,9 @@ if ($result) {
                                     <span class="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold font-mono">@<?php echo htmlspecialchars($row['username']); ?></span>
                                 </td>
                                 <td class="p-6">
-                                    <span class="inline-flex items-center gap-1.5 <?php echo (int)$row['role_id'] == 1 ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-blue-700 bg-blue-50 border-blue-200'; ?> px-3 py-1 rounded-full text-[11px] font-bold border">
-                                        <i class="fa <?php echo (int)$row['role_id'] == 1 ? 'fa-star' : 'fa-briefcase'; ?> text-[10px]"></i>
-                                        <?php echo (int)$row['role_id'] == 1 ? 'Admin (ผู้จัดการ)' : 'Staff (พนักงาน)'; ?>
+                                    <span class="inline-flex items-center gap-1.5 <?php echo $row['role_id'] == 1 ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-blue-700 bg-blue-50 border-blue-200'; ?> px-3 py-1 rounded-full text-[11px] font-bold border">
+                                        <i class="fa <?php echo $row['role_id'] == 1 ? 'fa-star' : 'fa-briefcase'; ?> text-[10px]"></i>
+                                        <?php echo $row['role_id'] == 1 ? 'Admin (ผู้จัดการ)' : 'Staff (พนักงาน)'; ?>
                                     </span>
                                 </td>
                                 <td class="p-6 text-center">
@@ -220,7 +211,7 @@ if ($result) {
                                 <td class="p-6 text-center">
                                     <div class="flex justify-center items-center gap-2">
                                         <button type="button" 
-                                                onclick='openEditModal(<?php echo json_encode($row); ?>)'
+                                                onclick='openEditModal(<?php echo json_encode($row, JSON_HEX_APOS | JSON_HEX_QUOT); ?>)'
                                                 title="แก้ไขข้อมูลและสิทธิ์" 
                                                 class="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-500 hover:text-white transition flex items-center justify-center shadow-sm">
                                             <i class="fa fa-edit text-xs"></i>
@@ -239,7 +230,7 @@ if ($result) {
                                     </div>
                                 </td>
                             </tr>
-                            <?php endforeach; else: ?>
+                            <?php endwhile; else: ?>
                             <tr><td colspan="5" class="p-16 text-center text-slate-300 font-bold uppercase tracking-widest">ไม่พบรายชื่อผู้ใช้งาน</td></tr>
                             <?php endif; ?>
                         </tbody>
@@ -380,13 +371,13 @@ if ($result) {
             const roleSelect = document.getElementById('edit_role_id');
             const activeSelect = document.getElementById('edit_is_active');
             
-            // กรณีแก้ไขบัญชีตัวเอง ใช้การจางตัวเลือกเพื่อไม่ให้ปรับแก้ แต่ไม่ใช้ .disabled (เพื่อให้ส่งค่า Form ไปยัง PHP ได้)
+            // กรณีเป็นบัญชีของแอดมินคนปัจจุบัน ห้ามคลิกเปลี่ยนบทบาท/สถานะ แต่ยังคงส่งค่าผ่าน Form ได้ปกติ
             if (parseInt(emp.id) === currentUserId) {
-                roleSelect.classList.add('pointer-events-none', 'bg-slate-100', 'text-slate-400');
-                activeSelect.classList.add('pointer-events-none', 'bg-slate-100', 'text-slate-400');
+                roleSelect.classList.add('pointer-events-none', 'bg-slate-200');
+                activeSelect.classList.add('pointer-events-none', 'bg-slate-200');
             } else {
-                roleSelect.classList.remove('pointer-events-none', 'bg-slate-100', 'text-slate-400');
-                activeSelect.classList.remove('pointer-events-none', 'bg-slate-100', 'text-slate-400');
+                roleSelect.classList.remove('pointer-events-none', 'bg-slate-200');
+                activeSelect.classList.remove('pointer-events-none', 'bg-slate-200');
             }
 
             document.getElementById('editEmpModal').classList.remove('hidden');
