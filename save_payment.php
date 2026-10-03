@@ -12,11 +12,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
     $booking_id = intval($_POST['booking_id'] ?? 0);
 
     if ($booking_id <= 0 || !$conn) {
-        header("Location: index.php");
+        echo "<script>alert('ข้อมูลการจองไม่ถูกต้อง หรือไม่ได้เชื่อมต่อฐานข้อมูล'); window.location.href='index.php';</script>";
         exit();
     }
 
-    // 1. ตรวจสอบว่ามีข้อมูลการจองจริงหรือไม่ (PostgreSQL)
+    // 1. ตรวจสอบไฟล์อัปโหลดว่ามี Error จาก PHP หรือไม่
+    $file_error = $_FILES['payment_slip']['error'];
+    if ($file_error !== UPLOAD_ERR_OK) {
+        $error_messages = [
+            UPLOAD_ERR_INI_SIZE   = 'ขนาดไฟล์ใหญ่เกินกำหนดใน php.ini',
+            UPLOAD_ERR_FORM_SIZE  = 'ขนาดไฟล์ใหญ่เกินกำหนดในฟอร์ม HTML',
+            UPLOAD_ERR_PARTIAL    = 'ไฟล์ถูกอัปโหลดมาไม่ครบถ้วน',
+            UPLOAD_ERR_NO_FILE    = 'ไม่ได้เลือกไฟล์สลิป',
+            UPLOAD_ERR_NO_TMP_DIR = 'ไม่พบโฟลเดอร์ชั่วคราวบนเซิร์ฟเวอร์',
+            UPLOAD_ERR_CANT_WRITE = 'ไม่สามารถเขียนไฟล์ลงดิสก์ได้ (ตรวจสอบสิทธิ์ Permission โฟลเดอร์)',
+            UPLOAD_ERR_EXTENSION  = 'ถูกบล็อกโดย PHP Extension'
+        ];
+        $msg = $error_messages[$file_error] ?? 'เกิดข้อผิดพลาดในการอัปโหลดไฟล์ (Code: ' . $file_error . ')';
+        echo "<script>alert('$msg'); window.history.back();</script>";
+        exit();
+    }
+
+    // 2. ตรวจสอบว่ามีข้อมูลการจองจริงหรือไม่
     $sql_bk = "SELECT b.*, COALESCE(r.name, r.raft_name, '') AS raft_name 
                FROM bookings b 
                LEFT JOIN rafts r ON b.raft_id = r.id 
@@ -24,7 +41,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
     $booking_res = @pg_query_params($conn, $sql_bk, array($booking_id));
 
     if (!$booking_res || pg_num_rows($booking_res) === 0) {
-        // Fallback เผื่อตารางใช้ booking_id แทน id
         $sql_bk = "SELECT b.*, COALESCE(r.name, r.raft_name, '') AS raft_name 
                    FROM bookings b 
                    LEFT JOIN rafts r ON b.raft_id = r.raft_id 
@@ -32,46 +48,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         $booking_res = @pg_query_params($conn, $sql_bk, array($booking_id));
         
         if (!$booking_res || pg_num_rows($booking_res) === 0) {
-            echo "<script>alert('ไม่พบข้อมูลการจอง'); window.location.href='index.php';</script>";
+            echo "<script>alert('ไม่พบข้อมูลการจองในระบบ'); window.location.href='index.php';</script>";
             exit();
         }
     }
     $booking = pg_fetch_assoc($booking_res);
 
-    // ดึงราคาที่ต้องชำระ
     $default_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
 
-    // 2. ดึงข้อมูลจากฟอร์ม
-    $bank_name = !empty($_POST['bank_name']) ? trim($_POST['bank_name']) : 'โอนเงิน/PromptPay';
-    $transfer_time_input = !empty($_POST['transfer_time']) ? trim($_POST['transfer_time']) : date('Y-m-d H:i:s');
-    $paid_at = date('Y-m-d H:i:s', strtotime($transfer_time_input));
-    $transfer_ref = trim($_POST['transfer_ref'] ?? '');
-    $transfer_amount = (!empty($_POST['transfer_amount']) && floatval($_POST['transfer_amount']) > 0) 
-                       ? floatval($_POST['transfer_amount']) 
-                       : $default_price;
-
-    // 3. จัดการอัปโหลดไฟล์รูปสลิป
-    $target_dir = "uploads/slips/";
+    // 3. จัดการโฟลเดอร์อัปโหลดสลิป
+    $target_dir = __DIR__ . "/uploads/slips/";
     if (!file_exists($target_dir)) { 
-        @mkdir($target_dir, 0777, true); 
+        if (!@mkdir($target_dir, 0755, true)) {
+            echo "<script>alert('ไม่สามารถสร้างโฟลเดอร์ uploads/slips/ ได้ (ตรวจสอบ Permission โฟลเดอร์หลัก)'); window.history.back();</script>";
+            exit();
+        }
     }
 
+    // ตรวจสอบนามสกุลไฟล์
     $file_ext = strtolower(pathinfo($_FILES["payment_slip"]["name"], PATHINFO_EXTENSION));
-    
     if (!in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
-        echo "<script>alert('กรุณาอัปโหลดไฟล์รูปภาพนามสกุล JPG, PNG หรือ WEBP เท่านั้น'); window.history.back();</script>";
+        echo "<script>alert('กรุณาอัปโหลดไฟล์รูปภาพนามสกุล JPG, JPEG, PNG หรือ WEBP เท่านั้น'); window.history.back();</script>";
         exit();
     }
 
     $new_filename = "slip_" . $booking_id . "_" . time() . "." . $file_ext;
     $target_file = $target_dir . $new_filename;
 
+    // 4. ย้ายไฟล์ไปยังโฟลเดอร์ปลายทาง
     if (move_uploaded_file($_FILES["payment_slip"]["tmp_name"], $target_file)) {
         
         $payment_code = "PAY" . date('Ymd') . str_pad($booking_id, 4, '0', STR_PAD_LEFT);
+        $bank_name = !empty($_POST['bank_name']) ? trim($_POST['bank_name']) : 'โอนเงิน/PromptPay';
+        $transfer_time_input = !empty($_POST['transfer_time']) ? trim($_POST['transfer_time']) : date('Y-m-d H:i:s');
+        $paid_at = date('Y-m-d H:i:s', strtotime($transfer_time_input));
+        $transfer_ref = trim($_POST['transfer_ref'] ?? '');
+        $transfer_amount = (!empty($_POST['transfer_amount']) && floatval($_POST['transfer_amount']) > 0) 
+                           ? floatval($_POST['transfer_amount']) 
+                           : $default_price;
         $notes = "ธนาคาร/ช่องทางโอน: " . $bank_name;
 
-        // 4. ตรวจสอบและบันทึกลงตาราง payments (ถ้ามีตาราง payments)
+        // 5. บันทึกลงตาราง payments (ถ้ามีตาราง)
         $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
         $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
 
@@ -93,7 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
             ));
         }
 
-        // 5. ปรับสถานะในตาราง bookings และบันทึกชื่อสลิป
+        // 6. อัปเดตตาราง bookings
         $b_cols = [];
         $chk_b = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
         if ($chk_b) {
@@ -126,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
             @pg_query_params($conn, $sql_up_b, $b_params);
         }
 
-        // 6. ส่งแจ้งเตือน LINE พร้อมรูปสลิป (ผ่าน LINE Messaging API)
+        // 7. ส่งแจ้งเตือน LINE ไปหาแอดมินพร้อมรูปสลิป
         $guest_name = !empty($booking['guest_name']) ? $booking['guest_name'] : 'ลูกค้า';
         $raft_display = $booking['raft_name'] ?? ('แพ #' . ($booking['raft_id'] ?? ''));
 
@@ -145,29 +162,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         $line_msg .= "━━━━━━━━━━━━━━━━\n";
         $line_msg .= "⚠️ รูปสลิปหลักฐานการโอนด้านล่างนี้ 👇";
 
-        // สร้าง Public URL ของรูปสลิป
         $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
         $host = $_SERVER['HTTP_HOST'];
         $base_dir = rtrim(dirname($_SERVER['PHP_SELF']), '/\\');
         $slip_public_url = "$protocol://$host" . ($base_dir ? $base_dir : '') . "/uploads/slips/" . $new_filename;
 
-        // 🔑 ใส่ Token ที่ท่านให้มาเรียบร้อยแล้ว
         $line_access_token = 'jStaztWHf7QXNoCVTPhoqat7sCmK5HZp5GBJXrlUv+c9NMT26dzuAbalCnpxp53VSGoGBIU16cV5CSfyuKq4qpqbBv+Xd8ju3CTw3/sHfa3PpcS2RwYykgN3CqcJye6QEqexCW+w0MD8B9tF5w+FxAdB04t89/1O/w1cDnyilFU='; 
-        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID'; // ⚠️ อย่าลืมใส่ User ID หรือ Group ID ของแอดมินตรงนี้
+        $line_to_id = 'YOUR_ADMIN_USER_OR_GROUP_ID'; // ⚠️ อย่าลืมใส่ User ID หรือ Group ID ของแอดมิน
 
-        if (!empty($line_access_token)) {
+        if (!empty($line_access_token) && $line_to_id !== 'YOUR_ADMIN_USER_OR_GROUP_ID') {
             $push_data = [
                 'to' => $line_to_id,
                 'messages' => [
-                    [
-                        'type' => 'text',
-                        'text' => $line_msg
-                    ],
-                    [
-                        'type' => 'image',
-                        'originalContentUrl' => $slip_public_url,
-                        'previewImageUrl' => $slip_public_url
-                    ]
+                    ['type' => 'text', 'text' => $line_msg],
+                    ['type' => 'image', 'originalContentUrl' => $slip_public_url, 'previewImageUrl' => $slip_public_url]
                 ]
             ];
 
@@ -190,7 +198,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         exit();
 
     } else {
-        echo "<script>alert('ขออภัย, เกิดข้อผิดพลาดในการอัปโหลดไฟล์สลิป'); window.history.back();</script>";
+        // หาก move_uploaded_file ไม่สำเร็จ ให้แจ้งเตือนชัดเจน
+        echo "<script>alert('เกิดข้อผิดพลาดในการบันทึกไฟล์ภาพลงเซิร์ฟเวอร์ (โปรดตรวจสอบสิทธิ์เขียนไฟล์ของโฟลเดอร์ uploads/slips/)'); window.history.back();</script>";
         exit();
     }
 
