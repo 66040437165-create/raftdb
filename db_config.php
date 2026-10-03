@@ -32,10 +32,10 @@ if (!$conn) {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
 
-    // 🟢 3. ปลดล็อกสถานะแพทุกลำให้พร้อมให้บริการ (รองรับตัวพิมพ์เล็ก-ใหญ่และช่องว่าง)
+    // 🟢 3. ปลดล็อกสถานะแพทุกลำให้พร้อมให้บริการ
     @pg_query($conn, "UPDATE rafts SET status = 'available' WHERE status IS NULL OR LOWER(TRIM(status)) = 'pending'");
 
-    // 🟢 4. ตรวจสอบและเพิ่มคอลัมน์วันที่ที่จำเป็นในตาราง bookings ป้องกันการบันทึกตกหล่น
+    // 🟢 4. ตรวจสอบและเพิ่มคอลัมน์วันที่ที่จำเป็นในตาราง bookings
     @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in_date DATE");
     @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in_time VARCHAR(20)");
     @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_out_date DATE");
@@ -43,7 +43,7 @@ if (!$conn) {
     @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_in TIMESTAMP");
     @pg_query($conn, "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS check_out TIMESTAMP");
 
-    // 🟢 5. แก้ไขข้อมูลการจองเดิมที่บันทึกวันผิด (ซิงค์ check_in ให้ตรงกับ check_in_date ที่ลูกค้าเลือกจริง)
+    // 🟢 5. แก้ไขข้อมูลการจองเดิมที่บันทึกวันผิด
     @pg_query($conn, "UPDATE bookings 
                       SET check_in = (check_in_date || ' ' || COALESCE(check_in_time, '09:00'))::timestamp 
                       WHERE check_in_date IS NOT NULL 
@@ -54,7 +54,7 @@ if (!$conn) {
                       SET check_in_date = check_in::date 
                       WHERE check_in_date IS NULL AND check_in IS NOT NULL");
 
-    // 🟢 6. ปรับคอลัมน์รูปภาพในตาราง rafts ให้เป็น TEXT รองรับรูป Base64 และลิงก์ URL ไม่จำกัดความยาว
+    // 🟢 6. ปรับคอลัมน์รูปภาพในตาราง rafts ให้เป็น TEXT ถาวร
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN featured_image TYPE TEXT");
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_1 TYPE TEXT");
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_2 TYPE TEXT");
@@ -62,19 +62,21 @@ if (!$conn) {
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_4 TYPE TEXT");
     @pg_query($conn, "ALTER TABLE rafts ALTER COLUMN image_5 TYPE TEXT");
 
-    // 🟢 7. ดึงรูปแพของจริงจากลำที่มีรูปอยู่แล้ว (แพ 10, 12, 13) มาใส่แทนรูปวัดและรูปที่หายไปทั้งหมด
+    // 🟢 7. กู้คืนรูปภาพแพ (รันเฉพาะตอนที่รูปเป็นค่าว่าง และปลอดภัยไม่เขียนทับมั่ว)
+    // 7.1 ดึงรูปจาก image_1 กลับมาใส่ featured_image สำหรับลำที่ยังมีค่าใน image_1
     @pg_query($conn, "UPDATE rafts 
-                      SET featured_image = (
-                          SELECT featured_image FROM rafts 
-                          WHERE (name LIKE '%แพ 13%' OR name LIKE '%แพ 12%' OR name LIKE '%แพ 10%')
-                            AND featured_image IS NOT NULL 
-                            AND featured_image != '' 
-                            AND featured_image NOT LIKE '%unsplash%'
-                          LIMIT 1
-                      ) 
-                      WHERE featured_image LIKE '%unsplash%' 
-                         OR featured_image IS NULL 
-                         OR featured_image = ''");
+                      SET featured_image = image_1 
+                      WHERE (featured_image IS NULL OR featured_image = '' OR featured_image LIKE '%unsplash%') 
+                        AND (image_1 IS NOT NULL AND image_1 != '' AND image_1 NOT LIKE '%unsplash%')");
+
+    // 7.2 ค้นหารูปแพจริงลำใดก็ได้ที่มีอยู่ในระบบ มาใส่ให้ลำที่รูปยังว่างอยู่
+    $chk_any_img = @pg_query($conn, "SELECT image_1 FROM rafts WHERE image_1 IS NOT NULL AND image_1 != '' AND image_1 NOT LIKE '%unsplash%' LIMIT 1");
+    if ($chk_any_img && $img_row = pg_fetch_assoc($chk_any_img)) {
+        $found_real_img = $img_row['image_1'];
+        if (!empty($found_real_img)) {
+            @pg_query_params($conn, "UPDATE rafts SET featured_image = $1 WHERE featured_image IS NULL OR featured_image = '' OR featured_image LIKE '%unsplash%'", array($found_real_img));
+        }
+    }
 }
 
 // --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
