@@ -47,9 +47,9 @@ if ($conn) {
     $params = [];
     $p_idx = 1;
 
-    // เงื่อนไขสถานะของแพ
+    // 🟢 แก้ไขจุดที่ 1: กรองเฉพาะแพที่ "ปิดปรับปรุง / ปิดซ่อมแซม" เท่านั้น (แพที่มีสถานะ pending หรือ available ต้องแสดงผลได้ตามปกติ)
     $where_clauses = [
-        "(r.status IS NULL OR TRIM(LOWER(r.status)) IN ('available', 'ว่าง', 'ready', 'active', '1', ''))"
+        "(r.status IS NULL OR TRIM(LOWER(r.status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0'))"
     ];
 
     if (in_array('is_active', $r_cols)) {
@@ -70,11 +70,18 @@ if ($conn) {
         }
     }
 
-    // ตรวจสอบกับรายการจอง (NOT EXISTS)
+    // 🟢 แก้ไขจุดที่ 2: ตรวจสอบคิวว่างเฉพาะ "วันที่ค้นหา ($checkin)" เท่านั้น
     if (!empty($b_cols) && in_array('raft_id', $b_cols)) {
-        $date_col = in_array('check_in_date', $b_cols) ? 'b.check_in_date' : (in_array('check_in', $b_cols) ? 'b.check_in' : null);
+        $date_expr = null;
+        if (in_array('check_in_date', $b_cols) && in_array('check_in', $b_cols)) {
+            $date_expr = "COALESCE(b.check_in_date, b.check_in::date)";
+        } elseif (in_array('check_in_date', $b_cols)) {
+            $date_expr = "b.check_in_date";
+        } elseif (in_array('check_in', $b_cols)) {
+            $date_expr = "b.check_in::date";
+        }
 
-        if ($date_col) {
+        if ($date_expr) {
             $st_filters = [];
             if (in_array('status_id', $b_cols)) {
                 $st_filters[] = "COALESCE(b.status_id, 0) NOT IN (3, 4)";
@@ -84,10 +91,11 @@ if ($conn) {
             }
             $st_sql = !empty($st_filters) ? " AND (" . implode(" AND ", $st_filters) . ")" : "";
 
+            // ตรวจสอบว่าแพลำนี้ มีการจองที่ตรงกับวันที่ $checkin หรือไม่
             $where_clauses[] = "NOT EXISTS (
                 SELECT 1 FROM bookings b 
                 WHERE b.raft_id = r.id 
-                  AND $date_col::date = $" . $p_idx . "::date
+                  AND $date_expr = $" . $p_idx . "::date
                   $st_sql
             )";
             $params[] = $checkin;
@@ -98,9 +106,9 @@ if ($conn) {
     $sql = "SELECT r.* FROM rafts r WHERE " . implode(" AND ", $where_clauses) . " ORDER BY r.id DESC";
     $result = !empty($params) ? @pg_query_params($conn, $sql, $params) : @pg_query($conn, $sql);
 
-    // ระบบสำรอง (Fallback)
+    // ระบบสำรอง (Fallback): แสดงแพทุกลำที่ไม่ใช่แพปิดปรับปรุง
     if (!$result || pg_num_rows($result) === 0) {
-        $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) IN ('available', 'ว่าง', 'ready', 'active', '1', '')) ORDER BY id DESC";
+        $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0')) ORDER BY id DESC";
         $result = @pg_query($conn, $fallback_sql);
     }
 
@@ -152,7 +160,6 @@ if ($conn) {
                     <i class="fa fa-calendar-alt text-blue-500"></i> ปฏิทินการจอง
                 </a>
                 
-                <!-- ปุ่มแอดไลน์ใน Navbar สำหรับดูด่วน -->
                 <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="hidden md:flex bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2 rounded-xl text-xs transition font-bold items-center gap-1.5">
                     <i class="fab fa-line text-emerald-500 text-sm"></i> @906kkkfr
                 </a>
@@ -236,7 +243,6 @@ if ($conn) {
                     $raft_id = $row['id'];
                     $raft_name = htmlspecialchars($row['name']);
                     
-                    // ระบบดึงรูปภาพแบบสลับเลือก (Smart Fallback Image)
                     $displayImg = "";
                     $target_dir = __DIR__ . "/uploads/";
 
@@ -298,15 +304,13 @@ if ($conn) {
         </div>
     </main>
 
-    <!-- 🟢 ส่วนหน้าแอดไลน์ร้านค้า (Official LINE Section) -->
+    <!-- ส่วนหน้าแอดไลน์ร้านค้า (Official LINE Section) -->
     <section class="container mx-auto px-6 mb-16">
         <div class="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-[2.5rem] p-8 md:p-12 text-white shadow-2xl relative overflow-hidden">
-            <!-- ลวดลายพื้นหลัง -->
             <div class="absolute -right-16 -bottom-16 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
             <div class="absolute -left-16 -top-16 w-64 h-64 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none"></div>
 
             <div class="relative z-10 flex flex-col lg:flex-row items-center justify-between gap-8 md:gap-12">
-                <!-- ข้อมูลฝั่งซ้าย -->
                 <div class="text-center lg:text-left max-w-xl">
                     <span class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider text-emerald-100 mb-4">
                         <i class="fab fa-line text-sm"></i> Official Account
@@ -318,7 +322,6 @@ if ($conn) {
                         รับแจ้งเตือนสถานะการจองทันใจ ส่งสลิปโอนเงิน หรือสอบถามพูดคุยกับเจ้าหน้าที่ได้ตลอด 24 ชั่วโมง สะดวก รวดเร็ว ไม่พลาดทุกการติดต่อ
                     </p>
 
-                    <!-- ไฮไลท์ฟีเจอร์ -->
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
                         <div class="bg-white/10 backdrop-blur-sm p-3.5 rounded-2xl border border-white/10">
                             <p class="font-bold text-xs"><i class="fa fa-bell mr-1.5 text-yellow-300"></i> แจ้งเตือนคิวจอง</p>
@@ -334,7 +337,6 @@ if ($conn) {
                         </div>
                     </div>
 
-                    <!-- ปุ่มกดแอดไลน์ -->
                     <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
                         <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" 
                            class="w-full sm:w-auto bg-white text-emerald-700 hover:bg-emerald-50 px-8 py-4 rounded-2xl font-black text-sm md:text-base shadow-xl transition flex items-center justify-center gap-2 btn-animate">
@@ -344,7 +346,6 @@ if ($conn) {
                     </div>
                 </div>
 
-                <!-- QR Code ฝั่งขวาสำหรับสแกน -->
                 <div class="bg-white p-6 rounded-3xl shadow-xl text-center text-gray-800 shrink-0 border-4 border-emerald-300/40">
                     <p class="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-3">สแกน QR Code เพิ่มเพื่อน</p>
                     <div class="bg-gray-50 p-2 rounded-2xl inline-block shadow-inner mb-3">
@@ -375,7 +376,7 @@ if ($conn) {
         </div>
     </footer>
 
-    <!-- 🟢 ปุ่มลอย LINE (Floating Action Button) มุมขวาล่าง -->
+    <!-- ปุ่มลอย LINE (Floating Action Button) มุมขวาล่าง -->
     <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" 
        class="fixed bottom-6 right-6 z-50 bg-[#06C755] hover:bg-[#05b04b] text-white p-4 rounded-full shadow-2xl flex items-center justify-center gap-2 group transition-all duration-300 hover:pr-6 hover:shadow-emerald-300 hover:-translate-y-1">
         <i class="fab fa-line text-3xl"></i>
