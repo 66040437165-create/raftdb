@@ -8,6 +8,13 @@ if (file_exists(__DIR__ . '/db_config.php')) {
     require_once __DIR__ . '/../db_config.php';
 }
 
+// 🟢 โหลดไฟล์ line_helper.php สำหรับส่งแจ้งเตือน LINE
+if (file_exists(__DIR__ . '/line_helper.php')) {
+    require_once __DIR__ . '/line_helper.php';
+} elseif (file_exists(__DIR__ . '/../line_helper.php')) {
+    require_once __DIR__ . '/../line_helper.php';
+}
+
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $guest_name    = trim($_POST['guest_name'] ?? '');
     $guest_tel     = trim($_POST['guest_tel'] ?? '');
@@ -223,7 +230,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $params[] = $total_guests;
     }
 
-    // 🟢 แก้ไขจุดนี้: ใส่ราคาลงทุกคอลัมน์ราคาที่ตารางมีอยู่ (โดยเฉพาะ total_amount ที่บังคับ NOT NULL)
+    // ราคา
     if (in_array('total_amount', $b_cols)) {
         $insert_fields[] = "total_amount";
         $insert_values[] = '$' . $p_idx++;
@@ -240,7 +247,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $params[] = $total_price;
     }
 
-    // ข้อมูลสำรอง (guest_name, guest_tel, guest_email)
+    // ข้อมูลลูกค้า
     if (in_array('guest_name', $b_cols)) {
         $insert_fields[] = "guest_name";
         $insert_values[] = '$' . $p_idx++;
@@ -266,20 +273,41 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         // อัปเดตสถานะแพให้เป็น 'รอตรวจสอบ' (pending)
         @pg_query_params($conn, "UPDATE rafts SET status = 'pending' WHERE id = $1", array($raft_id));
 
-        // 4. ส่งข้อความแจ้งเตือนทาง LINE (ถ้ามีการตั้งค่าฟังก์ชันไว้)
+        // 🟢 4. ส่งข้อความแจ้งเตือนทาง LINE
         if (function_exists('send_line_message')) {
-            $line_msg  = "\n🔔 มีการจองใหม่!\n";
-            $line_msg .= "━━━━━━━━━━━━━━━━\n";
-            $line_msg .= "📋 รหัสการจอง: $booking_code (#$booking_id)\n";
-            $line_msg .= "👤 ชื่อผู้จอง: $guest_name\n";
-            $line_msg .= "📞 เบอร์โทร: $guest_tel\n";
-            $line_msg .= "⛵ แพ: $raft_name\n";
-            $line_msg .= "📅 วันที่: " . date('d/m/Y', strtotime($check_in_date)) . "\n";
-            $line_msg .= "⏰ เวลา: $check_in_time - $check_out_time น.\n";
-            $line_msg .= "💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n";
-            $line_msg .= "━━━━━━━━━━━━━━━━\n";
-            $line_msg .= "⚠️ กรุณาตรวจสอบและยืนยันการจองในระบบ";
-            @send_line_message($line_msg);
+            // 4.1 ข้อความแจ้งเตือนสำหรับ "แอดมิน"
+            $admin_msg  = "🔔 มีรายการจองแพใหม่!\n";
+            $admin_msg .= "━━━━━━━━━━━━━━━━\n";
+            $admin_msg .= "📋 รหัสการจอง: {$booking_code} (#{$booking_id})\n";
+            $admin_msg .= "⛵ แพ: {$raft_name}\n";
+            $admin_msg .= "👤 ผู้จอง: {$guest_name}\n";
+            $admin_msg .= "📞 เบอร์โทร: {$guest_tel}\n";
+            $admin_msg .= "📅 วันที่เข้าพัก: " . date('d/m/Y', strtotime($check_in_date)) . "\n";
+            $admin_msg .= "⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n";
+            $admin_msg .= "💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n";
+            $admin_msg .= "━━━━━━━━━━━━━━━━\n";
+            $admin_msg .= "👉 ตรวจสอบและกดยืนยันในระบบหลังบ้าน";
+
+            // ยิงแจ้งเตือนหาแอดมิน
+            if (defined('LINE_ADMIN_USER_ID')) {
+                send_line_message(LINE_ADMIN_USER_ID, $admin_msg);
+            }
+
+            // 4.2 ข้อความยืนยันสำหรับ "ลูกค้า" (กรณีลูกค้าล็อกอินผ่าน LINE)
+            $customer_line_id = $_SESSION['line_user_id'] ?? $_SESSION['user_line_id'] ?? null;
+            if (!empty($customer_line_id)) {
+                $customer_msg  = "🎉 ขอบคุณที่จอง ล่องแพหนองกวาก!\n";
+                $customer_msg .= "━━━━━━━━━━━━━━━━\n";
+                $customer_msg .= "📋 รหัสการจอง: {$booking_code}\n";
+                $customer_msg .= "⛵ แพที่คุณเลือก: {$raft_name}\n";
+                $customer_msg .= "📅 วันที่เข้าพัก: " . date('d/m/Y', strtotime($check_in_date)) . "\n";
+                $customer_msg .= "⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n";
+                $customer_msg .= "💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n";
+                $customer_msg .= "━━━━━━━━━━━━━━━━\n";
+                $customer_msg .= "กรุณาแนบหลักฐานการชำระเงินผ่านหน้าเว็บเพื่อยืนยันคิวของคุณครับ";
+
+                send_line_message($customer_line_id, $customer_msg);
+            }
         }
 
         header("Location: booking_success.php?id=" . $booking_id);
