@@ -20,13 +20,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
     $file_error = $_FILES['payment_slip']['error'];
     if ($file_error !== UPLOAD_ERR_OK) {
         $error_messages = [
-            UPLOAD_ERR_INI_SIZE   = 'ขนาดไฟล์ใหญ่เกินกำหนดใน php.ini',
-            UPLOAD_ERR_FORM_SIZE  = 'ขนาดไฟล์ใหญ่เกินกำหนดในฟอร์ม HTML',
-            UPLOAD_ERR_PARTIAL    = 'ไฟล์ถูกอัปโหลดมาไม่ครบถ้วน',
-            UPLOAD_ERR_NO_FILE    = 'ไม่ได้เลือกไฟล์สลิป',
-            UPLOAD_ERR_NO_TMP_DIR = 'ไม่พบโฟลเดอร์ชั่วคราวบนเซิร์ฟเวอร์',
-            UPLOAD_ERR_CANT_WRITE = 'ไม่สามารถเขียนไฟล์ลงดิสก์ได้ (ตรวจสอบสิทธิ์ Permission โฟลเดอร์)',
-            UPLOAD_ERR_EXTENSION  = 'ถูกบล็อกโดย PHP Extension'
+            UPLOAD_ERR_INI_SIZE   => 'ขนาดไฟล์ใหญ่เกินกำหนดใน php.ini',
+            UPLOAD_ERR_FORM_SIZE  => 'ขนาดไฟล์ใหญ่เกินกำหนดในฟอร์ม HTML',
+            UPLOAD_ERR_PARTIAL    => 'ไฟล์ถูกอัปโหลดมาไม่ครบถ้วน',
+            UPLOAD_ERR_NO_FILE    => 'ไม่ได้เลือกไฟล์สลิป',
+            UPLOAD_ERR_NO_TMP_DIR => 'ไม่พบโฟลเดอร์ชั่วคราวบนเซิร์ฟเวอร์',
+            UPLOAD_ERR_CANT_WRITE => 'ไม่สามารถเขียนไฟล์ลงดิสก์ได้ (ตรวจสอบสิทธิ์ Permission โฟลเดอร์)',
+            UPLOAD_ERR_EXTENSION  => 'ถูกบล็อกโดย PHP Extension'
         ];
         $msg = $error_messages[$file_error] ?? 'เกิดข้อผิดพลาดในการอัปโหลดไฟล์ (Code: ' . $file_error . ')';
         echo "<script>alert('$msg'); window.history.back();</script>";
@@ -198,7 +198,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_slip'])) {
         exit();
 
     } else {
-        // หาก move_uploaded_file ไม่สำเร็จ ให้แจ้งเตือนชัดเจน
         echo "<script>alert('เกิดข้อผิดพลาดในการบันทึกไฟล์ภาพลงเซิร์ฟเวอร์ (โปรดตรวจสอบสิทธิ์เขียนไฟล์ของโฟลเดอร์ uploads/slips/)'); window.history.back();</script>";
         exit();
     }
