@@ -152,7 +152,7 @@ if ($conn) {
     <nav class="bg-white/90 backdrop-blur-md p-3 md:p-4 shadow-sm sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center">
             <a href="index.php" class="text-xl md:text-2xl font-black text-blue-600 flex items-center gap-2">
-                <span class="text-2xl md:text-3xl">🌊 ล่องแพหนองกวาก</span>
+                <span class="text-2xl md:text-3xl">ล่องแพหนองกวาก</span>
                 <span class="hidden xs:inline text-sm md:text-base font-bold text-gray-700">จองแพออนไลน์</span>
             </a>
             <div class="flex items-center space-x-2 md:space-x-4">
@@ -168,9 +168,7 @@ if ($conn) {
                     <span class="hidden sm:inline text-sm font-bold text-gray-600">👤 <?php echo htmlspecialchars($_SESSION['fullname'] ?? ''); ?></span>
                     <a href="logout.php" class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-xl text-[10px] md:text-xs transition font-bold shadow-lg shadow-red-100 btn-animate">ออกจากระบบ</a>
                 <?php else: ?>
-                    <a href="line_login.php" class="bg-[#06C755] hover:bg-[#05b04b] text-white px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
-                        <i class="fab fa-line text-sm"></i> เข้าสู่ระบบด้วย LINE
-                    </a>
+    
                     <a href="login.php" class="text-blue-600 px-2 md:px-3 py-2 rounded-lg font-bold hover:text-blue-800 transition text-[11px] md:text-sm">เจ้าหน้าที่</a>
                 <?php endif; ?>
             </div>
@@ -180,8 +178,8 @@ if ($conn) {
     <!-- Header Hero -->
     <header class="hero-bg text-white pt-32 pb-20 md:pt-48 md:pb-12 h-[75vh] md:h-auto flex items-center justify-center">
         <div class="container mx-auto text-center px-6">
-            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight">สัมผัสธรรมชาติเหนือผืนน้ำ</h2>
-            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90">จองแพพักผ่อน ล่องแพบรรยากาศสุดชิล สะดวก รวดเร็ว</p>
+            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight"></h2>
+            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90"></p>
 
             <div class="glass-effect p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl text-gray-800 max-w-6xl mx-auto border border-white/40 md:-mb-24 relative z-10">
                 <form action="index.php#rafts" method="GET" class="flex flex-col md:grid md:grid-cols-5 gap-4 md:gap-6 items-stretch md:items-end">
@@ -211,9 +209,8 @@ if ($conn) {
                         <div class="relative">
                             <i class="fa fa-users absolute left-4 top-1/2 -translate-y-1/2 text-blue-400 text-xs md:hidden"></i>
                             <select name="guests" class="w-full p-3 md:p-2 pl-10 md:pl-2 border-2 md:border-0 md:border-b-2 border-gray-100 md:border-gray-100 outline-none bg-white md:bg-transparent font-bold appearance-none rounded-xl md:rounded-none transition-all">
-                                <option value="2" <?php if($guests<=2) echo 'selected'; ?>>1-2 ท่าน</option>
-                                <option value="5" <?php if($guests>2 && $guests<=5) echo 'selected'; ?>>3-5 ท่าน</option>
-                                <option value="10" <?php if($guests>5) echo 'selected'; ?>>6-10 ท่าน</option>
+                                <option value="2" <?php if($guests<=2) echo 'selected'; ?>>1-15 ท่าน</option>
+
                             </select>
                         </div>
                     </div>
