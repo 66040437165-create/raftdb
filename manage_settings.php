@@ -1,31 +1,41 @@
 <?php
 session_start();
+// เรียกใช้ db_config.php จากโฟลเดอร์เดียวกัน
 require_once __DIR__ . '/db_config.php';
 
+// ตรวจสอบสิทธิ์ Admin
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
     exit();
 }
 
-// Table creation and defaults are now handled in db_config.php
-
-// 3. ระบบบันทึกข้อมูล
+// 1. บันทึกข้อมูลตั้งค่า (PostgreSQL)
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['save_settings'])) {
-    foreach ($_POST['settings'] as $key => $value) {
-        $key = $conn->real_escape_string($key);
-        $value = $conn->real_escape_string($value);
-        $conn->query("UPDATE settings SET setting_value = '$value' WHERE setting_key = '$key'");
+    if ($conn) {
+        foreach ($_POST['settings'] as $key => $value) {
+            $key_esc = pg_escape_string($conn, $key);
+            $value_esc = pg_escape_string($conn, $value);
+            
+            // ใช้ UPSERT (INSERT ... ON CONFLICT) สำหรับ PostgreSQL
+            $sql = "INSERT INTO settings (setting_key, setting_value) 
+                    VALUES ('$key_esc', '$value_esc') 
+                    ON CONFLICT (setting_key) 
+                    DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP";
+            @pg_query($conn, $sql);
+        }
     }
     header("Location: manage_settings.php?msg=success");
     exit();
 }
 
-// 4. ดึงข้อมูลมาแสดง
+// 2. ดึงข้อมูลมาแสดง (PostgreSQL)
 $settings = [];
-$res = $conn->query("SELECT * FROM settings");
-if ($res) {
-    while ($row = $res->fetch_assoc()) {
-        $settings[$row['setting_key']] = $row['setting_value'];
+if ($conn) {
+    $res = @pg_query($conn, "SELECT * FROM settings");
+    if ($res) {
+        while ($row = pg_fetch_assoc($res)) {
+            $settings[$row['setting_key']] = $row['setting_value'];
+        }
     }
 }
 ?>
