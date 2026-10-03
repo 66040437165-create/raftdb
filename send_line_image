@@ -1,0 +1,40 @@
+function send_line_image($image_url, $caption = "") {
+    $access_token = 'YOUR_LINE_CHANNEL_ACCESS_TOKEN'; // ใส่ Channel Access Token ของคุณ
+    $to_id = 'YOUR_ADMIN_LINE_USER_OR_GROUP_ID';       // ใส่ User ID หรือ Group ID ของแอดมิน
+
+    $messages = [];
+
+    // ถ้ามีข้อความบรรยายด้วย ให้ใส่ข้อความก่อน
+    if (!empty($caption)) {
+        $messages[] = [
+            'type' => 'text',
+            'text' => $caption
+        ];
+    }
+
+    // เพิ่มประเภทข้อความแบบรูปภาพ (LINE บังคับใช้ทั้ง Original และ Preview เป็น HTTPS)
+    $messages[] = [
+        'type' => 'image',
+        'originalContentUrl' => $image_url,
+        'previewImageUrl' => $image_url
+    ];
+
+    $data = [
+        'to' => $to_id,
+        'messages' => $messages
+    ];
+
+    $ch = curl_init('https://api.line.me/v2/bot/message/push');
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $access_token
+    ]);
+    
+    $result = curl_exec($ch);
+    curl_close($ch);
+    
+    return $result;
+}
