@@ -15,27 +15,27 @@ if ($conn) {
     $res_types = @pg_query($conn, "SELECT * FROM raft_types ORDER BY id ASC");
     if ($res_types) {
         while ($t = pg_fetch_assoc($res_types)) {
-            $raft_types[] =$t;
+            $raft_types[] = $t;
         }
     }
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $name         = trim($_POST['name'] ?? '');
-    $raft_type_id = intval($_POST['raft_type_id'] ?? 0);
-    $capacity     = intval($_POST['capacity'] ?? 0);
-    $price_day    = floatval($_POST['price_per_day'] ?? 0);
-    $price_hour   = isset($_POST['price_per_hour']) && $_POST['price_per_hour'] !== '' ? floatval($_POST['price_per_hour']) : 0;
+    $name          = trim($_POST['name'] ?? '');
+    $raft_type_id  = intval($_POST['raft_type_id'] ?? 0);
+    $capacity      = intval($_POST['capacity'] ?? 0);
+    $price_day     = floatval($_POST['price_per_day'] ?? 0);
+    $price_hour    = isset($_POST['price_per_hour']) && $_POST['price_per_hour'] !== '' ? floatval($_POST['price_per_hour']) : 0;
     
-    $status       = trim($_POST['status'] ?? 'available');
-    $desc         = trim($_POST['description'] ?? '');
+    $status        = trim($_POST['status'] ?? 'available');
+    $desc          = trim($_POST['description'] ?? '');
+    $image_url_opt = trim($_POST['image_url'] ?? ''); // รองรับการแปะ URL รูปตรงๆ
 
     // สร้างรหัสแพอัตโนมัติ
-    $raft_code    = 'RAFT-' . date('ym') . rand(100, 999);
+    $raft_code     = 'RAFT-' . date('ym') . rand(100, 999);
 
-    if (!empty($name) &&$raft_type_id > 0 && $capacity > 0 &&$price_day > 0) {
+    if (!empty($name) && $raft_type_id > 0 && $capacity > 0 && $price_day > 0) {
         
-        // 2. จัดการอัปโหลดรูปภาพ
         $target_dir = "uploads/";
         if (!is_dir($target_dir)) { 
             @mkdir($target_dir, 0777, true); 
@@ -45,20 +45,29 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $images = ['', '', '', '', '']; // เตรียมพื้นที่สำหรับ image_1 ถึง image_5
         $img_index = 0;
 
+        // 1. ตรวจสอบกรณีผู้ใช้แปะเป็น URL ลิงก์รูปภาพ (ป้องกันรูปหายบน Render)
+        if (!empty($image_url_opt)) {
+            $featured_image = $image_url_opt;
+            $images[0] = $image_url_opt;
+            $img_index = 1;
+        }
+
+        // 2. จัดการอัปโหลดรูปภาพผ่านไฟล์ปกติ
         if (!empty($_FILES['raft_images']['name'][0])) {
-            foreach ($_FILES['raft_images']['name'] as $key =>$val) {
-                if ($img_index >= 5) break; // จำกัดสูงสุดแค่ 5 รูป
+            foreach ($_FILES['raft_images']['name'] as $key => $val) {
+                if ($img_index >= 5) break; // จำกัดสูงสุด 5 รูป
                 
-                if ($_FILES['raft_images']['error'][$key] === 0) {$file_ext = strtolower(pathinfo($_FILES["raft_images"]["name"][$key], PATHINFO_EXTENSION));
+                if (isset($_FILES['raft_images']['error'][$key]) && $_FILES['raft_images']['error'][$key] === 0) {
+                    $file_ext = strtolower(pathinfo($_FILES["raft_images"]["name"][$key], PATHINFO_EXTENSION));
                     if (in_array($file_ext, ['jpg', 'jpeg', 'png', 'webp'])) {
                         $image_name = "raft_" . time() . "_" . rand(100, 999) . "." . $file_ext;
-                        $target_file = $target_dir .$image_name;
+                        $target_file = $target_dir . $image_name;
 
-                        if (move_uploaded_file($_FILES["raft_images"]["tmp_name"][$key],$target_file)) {
+                        if (move_uploaded_file($_FILES["raft_images"]["tmp_name"][$key], $target_file)) {
                             if (empty($featured_image)) {
-                                $featured_image =$image_name; // รูปแรกเป็นรูปหลัก
+                                $featured_image = $image_name; // รูปแรกเป็นรูปหลัก
                             }
-                            $images[$img_index] =$image_name;
+                            $images[$img_index] = $image_name;
                             $img_index++;
                         }
                     }
@@ -197,22 +206,27 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         </div>
                     </div>
 
-                    <div>
-                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">รูปภาพแพ (รูปแรกจะเป็นรูปหลัก)</label>
+                    <!-- ส่วนอัปโหลดรูปภาพ -->
+                    <div class="border-t border-slate-100 pt-4">
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">1. ลิงก์ URL รูปภาพหลัก (แนะนำบน Render ไม่หาย 100%)</label>
+                        <input type="url" name="image_url" placeholder="https://example.com/image.jpg หรือลิงก์จากเน็ต"
+                               class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 font-bold placeholder:text-slate-300 transition text-sm mb-4">
+
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">2. หรือเลือกอัปโหลดไฟล์จากเครื่อง (สูงสุด 5 รูป)</label>
                         <div class="flex items-center justify-center w-full">
-                            <label class="flex flex-col items-center justify-center w-full h-40 border-2 border-slate-200 border-dashed rounded-[2rem] cursor-pointer bg-slate-50 hover:bg-blue-50 transition p-6 text-center">
+                            <label class="flex flex-col items-center justify-center w-full h-36 border-2 border-slate-200 border-dashed rounded-[2rem] cursor-pointer bg-slate-50 hover:bg-blue-50 transition p-6 text-center">
                                 <div class="flex flex-col items-center justify-center">
-                                    <div class="bg-white w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm mb-3">
-                                        <i class="fa fa-cloud-upload-alt text-blue-500 text-xl"></i>
+                                    <div class="bg-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-sm mb-2">
+                                        <i class="fa fa-cloud-upload-alt text-blue-500 text-lg"></i>
                                     </div>
                                     <p class="text-xs text-slate-500 font-bold"><span class="text-blue-600">คลิกเพื่ออัปโหลด</span> หรือลากไฟล์มาวาง</p>
-                                    <p class="text-[10px] text-slate-400 mt-1 uppercase tracking-tighter">เลือกได้สูงสุด 5 รูป (PNG, JPG)</p>
+                                    <p class="text-[10px] text-slate-400 mt-1 uppercase tracking-tighter">PNG, JPG, WEBP</p>
                                 </div>
                                 <input type="file" name="raft_images[]" accept="image/*" multiple class="hidden" id="img-input" onchange="previewImages(event)" />
                             </label>
                         </div>
-                        <div id="preview-container" class="mt-6 hidden">
-                            <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">ตัวอย่างรูปภาพที่เลือก:</p>
+                        <div id="preview-container" class="mt-4 hidden">
+                            <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">ตัวอย่างรูปภาพที่เลือก:</p>
                             <div id="img-previews" class="grid grid-cols-2 sm:grid-cols-4 gap-4"></div>
                         </div>
                     </div>
@@ -254,12 +268,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             previewWrapper.innerHTML = '';
             
             if (input.files && input.files.length > 0) {
-                if (input.files.length > 5) {
-                    alert("คุณสามารถเลือกรูปภาพได้สูงสุด 5 รูปเท่านั้น ระบบจะทำการเลือกเฉพาะ 5 รูปแรก");
-                }
-                
                 container.classList.remove('hidden');
-                
                 Array.from(input.files).slice(0, 5).forEach((file, index) => {
                     const reader = new FileReader();
                     reader.onload = function(e) {
