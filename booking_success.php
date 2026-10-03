@@ -93,20 +93,20 @@ function thai_date_short($date_str) {
 }
 
 // -------------------------------------------------------------------------
-// จัดเตรียมข้อความรายละเอียดเพื่อส่งเข้า LINE ร้าน
+// จัดเตรียมข้อความรายละเอียดเพื่อส่งเข้า LINE ร้านค้า (@906kkkfr)
 $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('แพ #' . ($booking['raft_id'] ?? ''));
 $line_text = "สวัสดีครับ ขอแจ้งรายละเอียดการจองแพครับ 🛶\n";
 $line_text .= "━━━━━━━━━━━━━━━━\n";
-$line_text .= "📋 Booking ID: {$booking_code}\n";
+$line_text .= "📋 รหัสการจอง: {$booking_code}\n";
 $line_text .= "👤 ชื่อผู้จอง: {$guest_name}\n";
 $line_text .= "📞 เบอร์โทร: {$guest_tel}\n";
 $line_text .= "⛵ แพที่จอง: {$raft_display_name}\n";
-$line_text .= "📅 วันที่เข้าใช้บริการ: " . thai_date_short($check_in_date) . " ({$check_in_time} น.)\n";
+$line_text .= "📅 วันที่เข้าพัก: " . thai_date_short($check_in_date) . " ({$check_in_time} น.)\n";
 $line_text .= "💰 ยอดรวมทั้งสิ้น: ฿" . number_format($total_price, 2) . "\n";
 $line_text .= "━━━━━━━━━━━━━━━━\n";
-$line_text .= "✨ รบกวนแอดมินตรวจสอบการชำระเงินให้ด้วยนะครับ";
+$line_text .= "✨ รบกวนตรวจสอบและยืนยันการจองด้วยครับ";
 
-$line_oa_id = "@YOUR_LINE_OA_ID"; // เปลี่ยนเป็น LINE OA ID ของร้านได้ตามต้องการ
+$line_oa_id = "@906kkkfr"; 
 $encoded_line_text = urlencode($line_text);
 $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_text}";
 // -------------------------------------------------------------------------
@@ -138,7 +138,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
             <div class="bg-slate-900 p-8 text-center text-white relative overflow-hidden">
                 <div class="relative z-10">
                     <p class="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">รหัสการจอง (Booking Code)</p>
-                    <p class="text-4xl font-black text-blue-400 tracking-wider"><?php echo $booking_code; ?></p>
+                    <p class="text-4xl font-black text-blue-400 tracking-wider"><?php echo htmlspecialchars($booking_code); ?></p>
                     
                     <?php if (!empty($slip_img)): ?>
                         <?php if ($is_confirmed): ?>
