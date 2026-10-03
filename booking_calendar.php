@@ -2,6 +2,10 @@
 session_start();
 require_once __DIR__ . '/db_config.php';
 
+// ตรวจสอบสิทธิ์ผู้ดูแลระบบ (Admin Check)
+$is_admin = (isset($_SESSION['role']) && strtolower($_SESSION['role']) === 'admin') || 
+            (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1);
+
 // --- AJAX API ENDPOINT ---
 if (isset($_GET['api']) && $_GET['api'] == '1') {
     header('Content-Type: application/json; charset=utf-8');
@@ -34,7 +38,7 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
         }
     }
 
-    // กรองช่วงวันที่ (รองรับทั้ง check_in_date และ check_in แบบ timestamp)
+    // กรองช่วงวันที่
     if (!empty($start)) {
         $start_date = substr($start, 0, 10);
         $where[] = "(COALESCE(b.check_out_date, b.check_in_date, b.check_in::date, CURRENT_DATE) >= $" . $p_idx++ . "::date)";
@@ -70,7 +74,6 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
 
         if ($result) {
             while ($row = pg_fetch_assoc($result)) {
-                // จัดรูปแบบวันเวลา
                 $check_in_date = $row['check_in_date'] ?? (!empty($row['check_in']) ? date('Y-m-d', strtotime($row['check_in'])) : date('Y-m-d'));
                 $check_in_time = !empty($row['check_in_time']) ? date('H:i', strtotime($row['check_in_time'])) : '09:00';
                 $start_iso     = "{$check_in_date}T{$check_in_time}:00";
@@ -79,7 +82,6 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
                 $check_out_time = !empty($row['check_out_time']) ? date('H:i', strtotime($row['check_out_time'])) : '17:30';
                 $end_iso        = "{$check_out_date}T{$check_out_time}:00";
 
-                // ตรวจสอบสถานะและกำหนดสี
                 $raw_status = strtolower($row['status'] ?? '');
                 $st_id = intval($row['status_id'] ?? 0);
 
@@ -89,22 +91,22 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
                 $status_key = 'pending';
 
                 if ($raw_status === 'confirmed' || $st_id === 2) {
-                    $color = '#10b981'; // เขียว
+                    $color = '#10b981'; 
                     $border_color = '#059669';
                     $status_th = 'ยืนยันแล้ว (ติดจอง)';
                     $status_key = 'confirmed';
                 } elseif ($raw_status === 'completed') {
-                    $color = '#3b82f6'; // ฟ้า
+                    $color = '#3b82f6'; 
                     $border_color = '#1d4ed8';
                     $status_th = 'เสร็จสิ้น';
                     $status_key = 'completed';
                 } elseif ($raw_status === 'pending' || $st_id === 1) {
-                    $color = '#f59e0b'; // ส้ม
+                    $color = '#f59e0b'; 
                     $border_color = '#d97706';
                     $status_th = 'รอตรวจสอบ';
                     $status_key = 'pending';
                 } elseif ($raw_status === 'cancelled' || in_array($st_id, [3, 4])) {
-                    $color = '#ef4444'; // แดง
+                    $color = '#ef4444'; 
                     $border_color = '#b91c1c';
                     $status_th = 'ยกเลิกการจอง';
                     $status_key = 'cancelled';
@@ -112,7 +114,9 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
 
                 $guest_name = $row['display_name'];
                 $tel = $row['display_tel'];
-                if (strlen($tel) >= 9 && !isset($_SESSION['role'])) {
+
+                // ซ่อนเบอร์เฉพาะลูกค้าทั่วไป แต่แอดมินจะเห็นเบอร์จริงเต็มจำนวน
+                if (!$is_admin && strlen($tel) >= 9) {
                     $tel = substr($tel, 0, 3) . '***' . substr($tel, -3);
                 }
 
@@ -132,7 +136,6 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
                         'booking_code' => $b_code,
                         'raft_id' => $row['raft_id'] ?? 0,
                         'raft_name' => $row['raft_name'] ?: 'แพ',
-                        'raft_img' => $row['raft_img'] ?? '',
                         'capacity' => $row['raft_capacity'] ?? 0,
                         'guest_name' => $guest_name,
                         'guest_tel' => $tel,
@@ -167,14 +170,16 @@ if ($conn) {
     }
 }
 
-// 2. ดึงสถิติประจำเดือนปัจจุบัน (PostgreSQL)
+// 2. ดึงสถิติและยอดเงินรวมประจำเดือน (PostgreSQL)
 $this_month = date('Y-m');
 $total_this_month = 0;
 $confirmed_this_month = 0;
 $pending_this_month = 0;
+$revenue_confirmed = 0.0;
+$revenue_pending = 0.0;
 
 if ($conn) {
-    // จองทั้งหมดเดือนนี้
+    // 2.1 จำนวนการจองทั้งหมด
     $q_total = @pg_query_params($conn, "
         SELECT COUNT(*) as cnt FROM bookings 
         WHERE (check_in_date::text LIKE $1 OR check_in::text LIKE $1)
@@ -183,21 +188,31 @@ if ($conn) {
     ", array($this_month . '%'));
     if ($q_total && $r = pg_fetch_assoc($q_total)) $total_this_month = (int)$r['cnt'];
 
-    // ยืนยันแล้ว
+    // 2.2 คิวที่ยืนยันแล้ว + ยอดเงินที่ได้รับจริง
     $q_conf = @pg_query_params($conn, "
-        SELECT COUNT(*) as cnt FROM bookings 
+        SELECT COUNT(*) as cnt, 
+               COALESCE(SUM(COALESCE(total_amount, total_price, raft_price, 0)), 0) as total_money 
+        FROM bookings 
         WHERE (check_in_date::text LIKE $1 OR check_in::text LIKE $1)
           AND (status = 'confirmed' OR status_id = 2)
     ", array($this_month . '%'));
-    if ($q_conf && $r = pg_fetch_assoc($q_conf)) $confirmed_this_month = (int)$r['cnt'];
+    if ($q_conf && $r = pg_fetch_assoc($q_conf)) {
+        $confirmed_this_month = (int)$r['cnt'];
+        $revenue_confirmed    = (float)$r['total_money'];
+    }
 
-    // รอตรวจสอบ
+    // 2.3 คิวรอตรวจสอบ + ยอดเงินที่รอยืนยัน
     $q_pend = @pg_query_params($conn, "
-        SELECT COUNT(*) as cnt FROM bookings 
+        SELECT COUNT(*) as cnt, 
+               COALESCE(SUM(COALESCE(total_amount, total_price, raft_price, 0)), 0) as total_money 
+        FROM bookings 
         WHERE (check_in_date::text LIKE $1 OR check_in::text LIKE $1)
           AND (status = 'pending' OR status_id = 1)
     ", array($this_month . '%'));
-    if ($q_pend && $r = pg_fetch_assoc($q_pend)) $pending_this_month = (int)$r['cnt'];
+    if ($q_pend && $r = pg_fetch_assoc($q_pend)) {
+        $pending_this_month = (int)$r['cnt'];
+        $revenue_pending    = (float)$r['total_money'];
+    }
 }
 
 $total_rafts_count = count($rafts);
@@ -218,8 +233,6 @@ $total_rafts_count = count($rafts);
 
     <style>
         body { font-family: 'Sarabun', sans-serif; background-color: #f8fafc; }
-        
-        /* Custom FullCalendar Styling */
         .fc {
             --fc-border-color: #e2e8f0;
             --fc-button-bg-color: #2563eb;
@@ -227,7 +240,7 @@ $total_rafts_count = count($rafts);
             --fc-button-hover-bg-color: #1d4ed8;
             --fc-button-active-bg-color: #1e40af;
             --fc-today-bg-color: #eff6ff;
-            border-radius: 1.25rem;
+            border-radius: 1.5rem;
             overflow: hidden;
             background: white;
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
@@ -287,21 +300,15 @@ $total_rafts_count = count($rafts);
             justify-content: center;
             margin: 4px;
         }
-        
         .btn-animate { transition: all 0.2s ease; }
         .btn-animate:hover { transform: translateY(-2px); }
         .btn-animate:active { transform: scale(0.97); }
-
-        .glass-header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(12px);
-        }
     </style>
 </head>
 <body class="bg-slate-50 text-gray-800 min-h-screen flex flex-col">
 
     <!-- Top Navbar -->
-    <nav class="glass-header shadow-sm border-b border-gray-100 sticky top-0 z-40">
+    <nav class="bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-100 sticky top-0 z-40">
         <div class="container mx-auto px-4 md:px-8 py-3.5 flex justify-between items-center">
             <a href="index.php" class="text-xl md:text-2xl font-black text-blue-600 flex items-center gap-2.5">
                 <span class="text-2xl md:text-3xl">🌊</span>
@@ -317,9 +324,9 @@ $total_rafts_count = count($rafts);
                 <a href="booking_calendar.php" class="text-blue-600 font-extrabold bg-blue-50 px-3.5 py-1.5 rounded-xl border border-blue-200 shadow-sm flex items-center gap-1.5">
                     <i class="fa fa-calendar-alt text-blue-500"></i> ปฏิทินการจอง
                 </a>
-                <?php if(isset($_SESSION['role']) && $_SESSION['role'] === 'admin'): ?>
-                    <a href="admin_dashboard.php" class="text-amber-700 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-xl border border-amber-200 transition flex items-center gap-1.5">
-                        <i class="fa fa-user-shield"></i> ระบบหลังบ้าน
+                <?php if ($is_admin): ?>
+                    <a href="admin_dashboard.php" class="text-amber-800 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-xl border border-amber-300 transition flex items-center gap-1.5 font-black">
+                        <i class="fa fa-user-shield text-amber-600"></i> ระบบหลังบ้าน
                     </a>
                 <?php endif; ?>
             </div>
@@ -340,41 +347,79 @@ $total_rafts_count = count($rafts);
     <!-- Main Container -->
     <main class="flex-grow container mx-auto px-4 md:px-8 py-6 md:py-8 max-w-7xl">
         
-        <!-- Header Title Banner -->
-        <div class="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 relative overflow-hidden">
-            <div class="absolute -right-10 -bottom-10 opacity-15 text-white pointer-events-none">
-                <i class="fa fa-calendar-days text-[180px]"></i>
-            </div>
-            <div class="relative z-10 max-w-3xl">
-                <div class="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold mb-3 border border-white/30">
-                    <i class="fa fa-sparkles text-yellow-300"></i> ระบบตรวจเช็คคิวแพแบบเรียลไทม์
+        <!-- 🟢 ส่วนสำหรับแอดมิน: แผงสรุปยอดเงินและคิวงาน (Admin Revenue & Operations Dashboard) -->
+        <?php if ($is_admin): ?>
+            <div class="mb-8 bg-slate-900 rounded-[2rem] p-6 md:p-8 text-white shadow-2xl border border-slate-800 relative overflow-hidden">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-6 border-b border-slate-800">
+                    <div>
+                        <div class="inline-flex items-center gap-1.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest mb-2">
+                            <i class="fa fa-shield-alt"></i> แดชบอร์ดสรุปยอดหลังบ้าน (Admin View)
+                        </div>
+                        <h2 class="text-2xl md:text-3xl font-black">สรุปยอดรายได้และการจองประจำเดือน</h2>
+                        <p class="text-xs text-slate-400 mt-1">ข้อมูลยอดเงินสด คิวการจอง และรายการรอตรวจสอบของเดือน <?php echo date('m/Y'); ?></p>
+                    </div>
+                    <a href="admin_dashboard.php" class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-2xl font-bold text-xs md:text-sm shadow-lg shadow-blue-600/30 flex items-center gap-2 self-start sm:self-auto transition btn-animate">
+                        <i class="fa fa-external-link-alt"></i> ไปที่ระบบจัดการหลังบ้าน
+                    </a>
                 </div>
-                <h1 class="text-2xl md:text-4xl font-extrabold mb-2 leading-tight">📅 ปฏิทินตารางการจองแพ</h1>
-                <p class="text-blue-100 text-xs md:text-sm leading-relaxed">
-                    ตรวจสอบวันที่แพว่างหรือถูกจองแล้วได้ทันทีแบบโปร่งใส สามารถกดดูรายละเอียดรายการจองหรือกดเลือกวันเพื่อจองแพที่ต้องการได้เลย
-                </p>
-            </div>
 
-            <!-- Stats Bar Inside Header -->
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-white/20">
-                <div class="bg-white/10 backdrop-blur-md rounded-2xl p-3 text-center border border-white/10">
-                    <span class="block text-[11px] text-blue-100 font-medium">จองทั้งหมดเดือนนี้</span>
-                    <span class="text-xl md:text-2xl font-black"><?php echo $total_this_month; ?> <span class="text-xs font-normal opacity-80">รายการ</span></span>
-                </div>
-                <div class="bg-emerald-500/20 backdrop-blur-md rounded-2xl p-3 text-center border border-emerald-300/30">
-                    <span class="block text-[11px] text-emerald-100 font-medium">ยืนยัน/ติดจอง</span>
-                    <span class="text-xl md:text-2xl font-black text-emerald-200"><?php echo $confirmed_this_month; ?> <span class="text-xs font-normal opacity-80">รายการ</span></span>
-                </div>
-                <div class="bg-amber-500/20 backdrop-blur-md rounded-2xl p-3 text-center border border-amber-300/30">
-                    <span class="block text-[11px] text-amber-100 font-medium">รอการตรวจสอบ</span>
-                    <span class="text-xl md:text-2xl font-black text-amber-200"><?php echo $pending_this_month; ?> <span class="text-xs font-normal opacity-80">รายการ</span></span>
-                </div>
-                <div class="bg-white/10 backdrop-blur-md rounded-2xl p-3 text-center border border-white/10">
-                    <span class="block text-[11px] text-blue-100 font-medium">แพทั้งหมดในระบบ</span>
-                    <span class="text-xl md:text-2xl font-black"><?php echo $total_rafts_count; ?> <span class="text-xs font-normal opacity-80">ลำ</span></span>
+                <!-- 4 การ์ดสรุปยอดเงินและคิวจอง -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- 1. ยอดรายได้อนุมัติแล้ว -->
+                    <div class="bg-gradient-to-br from-emerald-950/60 to-emerald-900/40 p-5 rounded-2xl border border-emerald-500/30">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-emerald-300">รายได้ที่อนุมัติแล้ว</span>
+                            <span class="w-8 h-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400"><i class="fa fa-wallet"></i></span>
+                        </div>
+                        <p class="text-2xl md:text-3xl font-black text-emerald-300">฿<?php echo number_format($revenue_confirmed, 2); ?></p>
+                        <p class="text-[11px] text-emerald-400/80 mt-1"><i class="fa fa-check-circle mr-1"></i> ได้รับเงินแล้ว (<?php echo $confirmed_this_month; ?> คิว)</p>
+                    </div>
+
+                    <!-- 2. ยอดเงินรอตรวจสอบ -->
+                    <div class="bg-gradient-to-br from-amber-950/60 to-amber-900/40 p-5 rounded-2xl border border-amber-500/30">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-amber-300">ยอดเงินรอตรวจสอบ</span>
+                            <span class="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400"><i class="fa fa-clock"></i></span>
+                        </div>
+                        <p class="text-2xl md:text-3xl font-black text-amber-300">฿<?php echo number_format($revenue_pending, 2); ?></p>
+                        <p class="text-[11px] text-amber-400/80 mt-1"><i class="fa fa-receipt mr-1"></i> รอตรวจสลิป (<?php echo $pending_this_month; ?> คิว)</p>
+                    </div>
+
+                    <!-- 3. คิวจองทั้งหมด -->
+                    <div class="bg-slate-800/60 p-5 rounded-2xl border border-slate-700/60">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-slate-300">จองทั้งหมดเดือนนี้</span>
+                            <span class="w-8 h-8 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400"><i class="fa fa-calendar-check"></i></span>
+                        </div>
+                        <p class="text-2xl md:text-3xl font-black text-white"><?php echo $total_this_month; ?> <span class="text-sm font-normal text-slate-400">รายการ</span></p>
+                        <p class="text-[11px] text-slate-400 mt-1">ยอดรวมคิวจองทุกลำ</p>
+                    </div>
+
+                    <!-- 4. แพพร้อมให้บริการ -->
+                    <div class="bg-slate-800/60 p-5 rounded-2xl border border-slate-700/60">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-slate-300">จำนวนแพในระบบ</span>
+                            <span class="w-8 h-8 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400"><i class="fa fa-ship"></i></span>
+                        </div>
+                        <p class="text-2xl md:text-3xl font-black text-white"><?php echo $total_rafts_count; ?> <span class="text-sm font-normal text-slate-400">ลำ</span></p>
+                        <p class="text-[11px] text-slate-400 mt-1">พร้อมเปิดให้บริการล่องแพ</p>
+                    </div>
                 </div>
             </div>
-        </div>
+        <?php else: ?>
+            <!-- Header Title Banner สำหรับลูกค้าทั่วไป -->
+            <div class="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 relative overflow-hidden">
+                <div class="relative z-10 max-w-3xl">
+                    <div class="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold mb-3 border border-white/30">
+                        <i class="fa fa-sparkles text-yellow-300"></i> ตรวจเช็คคิวแพแบบเรียลไทม์
+                    </div>
+                    <h1 class="text-2xl md:text-4xl font-extrabold mb-2 leading-tight">📅 ปฏิทินตารางการจองแพ</h1>
+                    <p class="text-blue-100 text-xs md:text-sm leading-relaxed">
+                        ตรวจสอบวันที่แพว่างหรือถูกจองแล้วได้ทันทีแบบโปร่งใส สามารถกดดูรายละเอียดรายการจองหรือกดเลือกวันเพื่อจองแพที่ต้องการได้เลย
+                    </p>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <!-- Filter Controls & Legend Bar -->
         <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-slate-200/80 mb-6">
@@ -487,6 +532,12 @@ $total_rafts_count = count($rafts);
                         <span class="block text-[11px] font-bold text-gray-400 uppercase">เบอร์โทรศัพท์</span>
                         <span id="modalGuestTel" class="font-bold text-gray-800 text-sm"></span>
                     </div>
+                    <?php if ($is_admin): ?>
+                        <div class="col-span-2 pt-1 border-t border-slate-200/60">
+                            <span class="block text-[11px] font-bold text-gray-400 uppercase">อีเมลลูกค้า</span>
+                            <span id="modalGuestEmail" class="font-bold text-gray-700 text-xs"></span>
+                        </div>
+                    <?php endif; ?>
                 </div>
 
                 <div class="space-y-2 bg-blue-50/60 p-4 rounded-2xl border border-blue-100">
@@ -510,9 +561,15 @@ $total_rafts_count = count($rafts);
                 <button onclick="closeModal('bookingModal')" class="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-gray-700 font-bold text-xs rounded-xl transition">
                     ปิดหน้าต่าง
                 </button>
-                <a id="modalActionBtn" href="index.php#rafts" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow-md flex items-center gap-1.5">
-                    <i class="fa fa-plus-circle"></i> จองแพนี้ในวันอื่น
-                </a>
+                <?php if ($is_admin): ?>
+                    <a id="modalAdminActionBtn" href="admin_dashboard.php" class="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl transition shadow-md flex items-center gap-1.5">
+                        <i class="fa fa-tasks"></i> จัดการในระบบหลังบ้าน
+                    </a>
+                <?php else: ?>
+                    <a id="modalActionBtn" href="index.php#rafts" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow-md flex items-center gap-1.5">
+                        <i class="fa fa-plus-circle"></i> จองแพนี้ในวันอื่น
+                    </a>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -601,6 +658,12 @@ $total_rafts_count = count($rafts);
                     document.getElementById('modalBookingId').textContent = props.booking_code;
                     document.getElementById('modalGuestName').textContent = props.guest_name;
                     document.getElementById('modalGuestTel').textContent = props.guest_tel;
+                    
+                    const emailElem = document.getElementById('modalGuestEmail');
+                    if (emailElem) {
+                        emailElem.textContent = props.guest_email || '-';
+                    }
+
                     document.getElementById('modalCheckIn').textContent = props.check_in_formatted;
                     document.getElementById('modalCheckOut').textContent = props.check_out_formatted;
                     document.getElementById('modalTotalPrice').textContent = props.total_price;
@@ -619,7 +682,10 @@ $total_rafts_count = count($rafts);
                         statusBadge.className += 'bg-red-100 text-red-800 border border-red-300';
                     }
 
-                    document.getElementById('modalActionBtn').href = `index.php?checkin=${props.check_in_raw}#rafts`;
+                    const actionBtn = document.getElementById('modalActionBtn');
+                    if (actionBtn) {
+                        actionBtn.href = `index.php?checkin=${props.check_in_raw}#rafts`;
+                    }
 
                     openModal('bookingModal');
                 },
@@ -657,7 +723,7 @@ $total_rafts_count = count($rafts);
                             card.innerHTML = `
                                 <div>
                                     <div class="font-bold text-slate-800 text-sm">⛵ ${p.raft_name}</div>
-                                    <div class="text-xs text-slate-500 mt-0.5">👤 ผู้จอง: ${p.guest_name} | 🕒 ${p.check_in_formatted}</div>
+                                    <div class="text-xs text-slate-500 mt-0.5">👤 ผู้จอง: ${p.guest_name} | 💰 ฿${p.total_price} | 🕒 ${p.check_in_formatted}</div>
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full ${p.status === 'confirmed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
                                     ${p.status_th}
