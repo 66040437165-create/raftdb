@@ -605,7 +605,7 @@ $total_rafts_count = count($rafts);
     <!-- Footer -->
     <footer class="bg-slate-900 text-slate-400 py-8 border-t border-slate-800 mt-12 text-center text-xs">
         <div class="container mx-auto px-4">
-            <p class="font-medium text-slate-300">ล่องแพหนองกวาก - สัมผัสธรรมชาติเหนือผืนน้ำ</p>
+            <p class="font-medium text-slate-300">ล่องแพหนองกวาก</p>
             <p class="mt-1 text-slate-500">© <?php echo date('Y'); ?> ChillRaft. All rights reserved.</p>
         </div>
     </footer>
