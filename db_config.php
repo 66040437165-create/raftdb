@@ -9,10 +9,10 @@ $conn = null;
 if ($database_url) {
     $db = parse_url($database_url);
     $servername = $db["host"] ?? "";
-    $username = $db["user"] ?? "";
-    $password = $db["pass"] ?? "";
-    $dbname = ltrim($db["path"] ?? "", "/");
-    $port = $db["port"] ?? "5432";
+    $username   = $db["user"] ?? "";
+    $password   = $db["pass"] ?? "";
+    $dbname     = ltrim($db["path"] ?? "", "/");
+    $port       = $db["port"] ?? "5432";
 
     $conn_string = "host=$servername port=$port dbname=$dbname user=$username password=$password";
     $conn = @pg_connect($conn_string);
@@ -32,53 +32,16 @@ if (!$conn) {
     )");
 }
 
-// --- ตั้งค่า LINE Login ---
+// --- ตั้งค่า LINE Login (สำหรับเข้าสู่ระบบบนเว็บ) ---
 if (!defined("LINE_CLIENT_ID")) define("LINE_CLIENT_ID", "2010677463"); 
 if (!defined("LINE_CLIENT_SECRET")) define("LINE_CLIENT_SECRET", "3684f4e6a269259f388538a275957873"); 
 if (!defined("LINE_REDIRECT_URI")) define("LINE_REDIRECT_URI", $base_url . "line_callback.php"); 
 
-// --- ตั้งค่า LINE Messaging API ---
-if (!defined("LINE_BOT_ACCESS_TOKEN")) define("LINE_BOT_ACCESS_TOKEN", "C9RIGCTTHW24CjZEyy1glVBPhSLBx15Kb48CQ+qIJX1NZiH3NeQte32Tp1C5zQD2dJIdi8ud55keeFkkcMwlpRsM8CEJHKPiphK1Lzl1NcOQlIyPEdCOjtRpkZYskqbnSDSGiRhCGPM7w3BdJ9ZTXQdB04t89/1O/w1cDnyilFU="); 
-if (!defined("LINE_NOTIFY_TARGET_ID")) define("LINE_NOTIFY_TARGET_ID", "Uc363e24c7774830ce61b1995d0b11e9d"); 
-
-/**
- * ฟังก์ชันสำหรับส่งข้อความแจ้งเตือนเข้าสู่ LINE
- */
-if (!function_exists("send_line_message")) {
-    function send_line_message($message_text, $custom_target_id = null) {
-        $target_id = (!empty($custom_target_id)) ? $custom_target_id : LINE_NOTIFY_TARGET_ID;
-
-        if (LINE_BOT_ACCESS_TOKEN === "" || empty($target_id)) {
-            return false; 
-        }
-
-        $url = "https://api.line.me/v2/bot/message/push";
-        
-        $data = [
-            "to" => $target_id,
-            "messages" => [
-                [
-                    "type" => "text",
-                    "text" => $message_text
-                ]
-            ]
-        ];
-        
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            "Content-Type: application/json",
-            "Authorization: Bearer " . LINE_BOT_ACCESS_TOKEN
-        ]);
-        
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        $result = curl_exec($ch);
-        curl_close($ch);
-        return $result;
-    }
+// --- โหลดระบบแจ้งเตือน LINE จาก line_helper.php ---
+if (file_exists(__DIR__ . '/line_helper.php')) {
+    require_once __DIR__ . '/line_helper.php';
+} elseif (file_exists(__DIR__ . '/../line_helper.php')) {
+    require_once __DIR__ . '/../line_helper.php';
 }
 
 // Query จำนวนรายการจองที่รอตรวจสอบสำหรับ Admin (ใช้ใน Sidebar)
