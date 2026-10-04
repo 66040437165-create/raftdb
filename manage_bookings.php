@@ -99,7 +99,8 @@ if (isset($_GET['delete_id']) && $conn) {
         if ($res_pay) {
             while ($p_data = pg_fetch_assoc($res_pay)) {
                 if (!empty($p_data['slip_image'])) {
-                    $file_path = "uploads/slips/" . $p_data['slip_image'];
+                    // 🟢 เปลี่ยน path ตอนลบไฟล์ให้ลบจาก uploads/ ตรงๆ
+                    $file_path = "uploads/" . $p_data['slip_image'];
                     if (file_exists($file_path)) { @unlink($file_path); }
                 }
             }
@@ -321,7 +322,7 @@ if ($conn) {
                                 <td class="p-6 text-center">
                                     <?php if(!empty($slip_file)): ?>
                                          <button onclick="openSlipModal(this)" 
-                                                 data-slip="uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
+                                                 data-slip="uploads/<?php echo htmlspecialchars($slip_file); ?>"
                                                  data-booking-id="<?php echo $booking_id; ?>"
                                                  data-booking-code="<?php echo htmlspecialchars($b_code); ?>"
                                                  data-guest-name="<?php echo htmlspecialchars($booker); ?>"
@@ -428,7 +429,7 @@ if ($conn) {
                     <div class="flex flex-wrap gap-2">
                         <?php if(!empty($slip_file)): ?>
                             <button onclick="openSlipModal(this)" 
-                                    data-slip="uploads/slips/<?php echo htmlspecialchars($slip_file); ?>"
+                                    data-slip="uploads/<?php echo htmlspecialchars($slip_file); ?>"
                                     data-booking-id="<?php echo $booking_id; ?>"
                                     data-booking-code="<?php echo htmlspecialchars($b_code); ?>"
                                     data-guest-name="<?php echo htmlspecialchars($booker); ?>"
@@ -519,7 +520,8 @@ if ($conn) {
             <div class="p-6 bg-slate-50 space-y-4">
                 <div class="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 text-center">
                     <a id="modalImageLink" href="#" target="_blank">
-                        <img id="modalImage" src="" class="w-full h-auto max-h-80 object-contain rounded-xl shadow-inner mx-auto">
+                        <!-- 🟢 เพิ่ม onerror ในรูปสลิปของ Modal ป้องกันรูปแตก -->
+                        <img id="modalImage" src="" class="w-full h-auto max-h-80 object-contain rounded-xl shadow-inner mx-auto" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80';">
                     </a>
                 </div>
 
