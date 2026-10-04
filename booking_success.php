@@ -240,7 +240,7 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                         </div>
                         
                         <p class="font-bold text-blue-900 text-lg">ล่องแพหนองกวาก</p>
-                        <p class="text-gray-400 text-sm">PromptPay ID: 089-123-4567</p>
+                        <p class="text-gray-400 text-sm">PromptPay ID: 081-038-4818</p>
                     </div>
 
                     <!-- 2. บัญชีธนาคาร -->
@@ -252,24 +252,12 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                 <div class="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-md">KBANK</div>
                                 <div>
                                     <p class="text-xs text-green-800 font-bold uppercase">ธนาคารกสิกรไทย</p>
-                                    <p class="font-black text-gray-700">012-3-45678-9</p>
+                                    <p class="font-black text-gray-700">161-1-99653-1</p>
                                 </div>
                             </div>
                             <button type="button" onclick="navigator.clipboard.writeText('012-3-45678-9'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
                         </div>
-
-                        <div class="bg-purple-50 p-4 rounded-2xl border border-purple-100 flex items-center justify-between">
-                            <div class="flex items-center gap-4">
-                                <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-md">SCB</div>
-                                <div>
-                                    <p class="text-xs text-purple-800 font-bold uppercase">ธนาคารไทยพาณิชย์</p>
-                                    <p class="font-black text-gray-700">987-6-54321-0</p>
-                                </div>
-                            </div>
-                            <button type="button" onclick="navigator.clipboard.writeText('987-6-54321-0'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-purple-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
-                        </div>
-                    </div>
-
+                        
                     <!-- 3. ส่วนแนบสลิป -->
                     <div class="border-t-2 border-dashed border-gray-100 pt-8">
                         <h3 class="text-gray-800 font-bold mb-4 flex items-center">
