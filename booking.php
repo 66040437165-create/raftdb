@@ -61,7 +61,7 @@ if (!$raft) {
     exit(); 
 }
 
-// 🟢 ฟังก์ชันจัดการ URL รูปภาพให้รองรับ Base64 และไฟล์ปกติ
+// 🟢 ฟังก์ชันจัดการ URL รูปภาพให้รองรับ Base64 และไฟล์ปกติ (แก้ปัญหา file_exists)
 function get_valid_image_url($img_val) {
     $img_val = trim($img_val ?? '');
     if (empty($img_val)) return '';
@@ -71,14 +71,11 @@ function get_valid_image_url($img_val) {
         return $img_val;
     }
 
-    // ถ้ารูปเป็นแค่ชื่อไฟล์ ให้เช็คว่าไฟล์มีจริงไหม แล้วเติม uploads/ ให้
-    $target_dir = __DIR__ . "/uploads/";
-    $clean_name = basename($img_val);
-    if (file_exists($target_dir . $clean_name)) {
-        return 'uploads/' . $clean_name;
-    }
-
-    return '';
+    // ตัดคำว่า uploads/ ออกให้หมดก่อน แล้วประกอบ path ใหม่
+    $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $img_val), '/');
+    
+    // ส่ง path ให้ browser ไปโหลดโดยตรง ไม่ต้องผ่าน file_exists ของ server 
+    return 'uploads/' . $clean_name;
 }
 
 // ดึงรูปภาพทั้งหมด
@@ -162,7 +159,9 @@ if (empty($_GET['checkin_time'])) {
             <!-- Main Image -->
             <div class="h-64 md:h-80 relative overflow-hidden <?php echo !empty($main_image) ? 'cursor-pointer' : ''; ?>" <?php echo !empty($main_image) ? 'onclick="openLightbox(0)"' : ''; ?>>
                 <?php if (!empty($main_image)): ?>
-                    <img id="mainBookingImage" src="<?php echo htmlspecialchars($main_image); ?>" class="w-full h-full object-cover transition-all duration-500 group-hover:scale-105">
+                    <img id="mainBookingImage" src="<?php echo htmlspecialchars($main_image); ?>" 
+                         class="w-full h-full object-cover transition-all duration-500 group-hover:scale-105"
+                         onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
                 <?php else: ?>
                     <img id="mainBookingImage" src="https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80" class="w-full h-full object-cover opacity-70">
                 <?php endif; ?>
@@ -192,7 +191,8 @@ if (empty($_GET['checkin_time'])) {
                         <div class="shrink-0 cursor-pointer group" onclick="setGalleryIndex(<?php echo $index; ?>)">
                             <img src="<?php echo htmlspecialchars($img['image_path']); ?>" 
                                  class="main-thumb-item w-20 h-16 md:w-24 md:h-20 object-cover rounded-xl border-2 <?php echo ($index == 0) ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'; ?> transition-all duration-300"
-                                 data-index="<?php echo $index; ?>">
+                                 data-index="<?php echo $index; ?>"
+                                 onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -379,7 +379,7 @@ if (empty($_GET['checkin_time'])) {
                 </button>
             <?php endif; ?>
 
-            <img id="lightboxImage" src="" class="max-h-[75vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl transition-all duration-300">
+            <img id="lightboxImage" src="" class="max-h-[75vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl transition-all duration-300" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
 
             <?php if (count($images) > 1): ?>
                 <button type="button" onclick="nextLightboxImage()" class="absolute right-2 md:right-6 z-20 w-12 h-12 md:w-14 md:h-14 bg-black/50 hover:bg-blue-600 text-white rounded-full flex items-center justify-center text-xl backdrop-blur-sm transition shadow-lg">
@@ -394,7 +394,8 @@ if (empty($_GET['checkin_time'])) {
                     <img src="<?php echo htmlspecialchars($img['image_path']); ?>" 
                          onclick="setLightboxImage(<?php echo $idx; ?>)"
                          class="lightbox-thumb-item w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl border-2 cursor-pointer transition opacity-50 hover:opacity-100 shrink-0" 
-                         data-index="<?php echo $idx; ?>">
+                         data-index="<?php echo $idx; ?>"
+                         onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80';">
                 <?php endforeach; ?>
             </div>
         <?php endif; ?>
@@ -402,7 +403,6 @@ if (empty($_GET['checkin_time'])) {
     <?php endif; ?>
 
     <script>
-        // 🟢 แก้ไขการส่งออกค่ารูปภาพไปยัง JavaScript ไม่ให้ถูกเติม 'uploads/' มั่วๆ
         const galleryImages = <?php 
             $js_imgs = [];
             foreach ($images as $i) { 
