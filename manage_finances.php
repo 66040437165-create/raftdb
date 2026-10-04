@@ -22,11 +22,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $title = trim($_POST['title'] ?? '');
     $amount = floatval($_POST['amount'] ?? 0);
     $expense_date = trim($_POST['expense_date'] ?? $today);
-    $note = trim($_POST['note'] ?? '');
 
     if (!empty($title) && $amount > 0) {
-        $stmt = pg_prepare($conn, "add_exp", "INSERT INTO expenses (title, amount, expense_date, note, created_at) VALUES ($1, $2, $3, $4, NOW())");
-        @pg_execute($conn, "add_exp", array($title, $amount, $expense_date, $note));
+        $stmt = pg_prepare($conn, "add_exp", "INSERT INTO expenses (title, amount, expense_date, created_at) VALUES ($1, $2, $3, NOW())");
+        @pg_execute($conn, "add_exp", array($title, $amount, $expense_date));
         header("Location: manage_finances.php?success=1");
         exit();
     }
@@ -135,7 +134,7 @@ $recent_expenses = @pg_query($conn, "SELECT * FROM expenses ORDER BY expense_dat
                     
                     <div>
                         <label class="block text-xs font-bold text-slate-600 mb-1">รายการรายจ่าย *</label>
-                        <input type="text" name="title" required placeholder="เช่น ค่าค่าน้ำมัน, ค่าซ่อมแพ" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-rose-500">
+                        <input type="text" name="title" required placeholder="เช่น ค่าน้ำมัน, ค่าซ่อมแพ" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-rose-500">
                     </div>
 
                     <div>
