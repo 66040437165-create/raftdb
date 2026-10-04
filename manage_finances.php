@@ -262,11 +262,20 @@ if (!empty($start_date) && !empty($end_date)) {
                 <!-- ตารางสรุปรายการล่าสุด -->
                 <div class="lg:col-span-2">
                     <div class="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden">
+                        
+                        <!-- Header พร้อมฟอร์มเลือกช่วงวันที่ และปุ่มปริ้นท์ -->
                         <div class="p-6 md:p-8 border-b border-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                            <h3 class="text-xl font-black text-slate-800 flex items-center gap-3">
-                                <i class="fa fa-history text-blue-500 text-2xl"></i> <?php echo $filter_title; ?>
-                            </h3>
+                            <div class="flex items-center gap-3">
+                                <h3 class="text-xl font-black text-slate-800 flex items-center gap-3">
+                                    <i class="fa fa-history text-blue-500 text-2xl"></i> <?php echo $filter_title; ?>
+                                </h3>
+                                <!-- ปุ่มพิมพ์รายการที่เลือก -->
+                                <button type="button" onclick="printSelectedItems()" class="bg-slate-900 hover:bg-black text-white px-4 py-2.5 rounded-2xl font-bold text-xs transition shadow-sm flex items-center gap-1.5">
+                                    <i class="fa fa-print"></i> พิมพ์รายการที่เลือก
+                                </button>
+                            </div>
                             
+                            <!-- ช่องเลือกช่วงวันที่ -->
                             <form method="GET" action="manage_finances.php" class="flex flex-wrap items-center gap-2 w-full md:w-auto">
                                 <div class="flex items-center gap-1 bg-gray-50 p-1.5 rounded-2xl border border-gray-200">
                                     <input type="date" name="start_date" value="<?php echo htmlspecialchars($start_date); ?>" 
@@ -290,17 +299,31 @@ if (!empty($start_date) && !empty($end_date)) {
                             <table class="w-full text-left font-sans">
                                 <thead class="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
                                     <tr>
+                                        <th class="p-4 text-center w-12">
+                                            <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)" class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer">
+                                        </th>
                                         <th class="p-6">วันที่</th>
                                         <th class="p-6">ประเภท</th>
                                         <th class="p-6">รายละเอียด</th>
-                                        <th class="p-6 text-right">รายได้(ค่าคิว)</th>
+                                        <th class="p-6 text-right">จำนวนเงิน</th>
                                         <th class="p-6 text-center">จัดการ</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-50">
                                     <?php if (!empty($all_transactions)): ?>
-                                        <?php foreach($all_transactions as $row): ?>
+                                        <?php foreach($all_transactions as $row): 
+                                            $type_text = ($row['type'] == 'income') ? 'ค่าคิว 10% (' . $row['status'] . ')' : 'รายจ่าย';
+                                            $formatted_amount = ($row['type'] == 'income' ? '+' : '-') . number_format($row['amount'], 2);
+                                        ?>
                                         <tr class="hover:bg-gray-50/50 transition duration-150">
+                                            <td class="p-4 text-center">
+                                                <input type="checkbox" class="row-checkbox w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                       data-date="<?php echo date('d/m/Y', strtotime($row['date'])); ?>"
+                                                       data-type="<?php echo htmlspecialchars($type_text); ?>"
+                                                       data-note="<?php echo htmlspecialchars($row['note']); ?>"
+                                                       data-amount="<?php echo $formatted_amount; ?>"
+                                                       data-raw-amount="<?php echo ($row['type'] == 'income' ? $row['amount'] : -$row['amount']); ?>">
+                                            </td>
                                             <td class="p-6 text-xs font-bold text-gray-500 whitespace-nowrap">
                                                 <?php echo date('d/m/Y', strtotime($row['date'])); ?>
                                             </td>
@@ -320,7 +343,7 @@ if (!empty($start_date) && !empty($end_date)) {
                                                 <?php endif; ?>
                                             </td>
                                             <td class="p-6 text-right font-black text-lg <?php echo $row['type'] == 'income' ? 'text-emerald-600' : 'text-rose-600'; ?>">
-                                                <?php echo ($row['type'] == 'income' ? '+' : '-') . number_format($row['amount'], 2); ?>
+                                                <?php echo $formatted_amount; ?>
                                             </td>
                                             <td class="p-6 text-center">
                                                 <?php if($row['type'] == 'expense'): ?>
@@ -337,7 +360,7 @@ if (!empty($start_date) && !empty($end_date)) {
                                         <?php endforeach; ?>
                                     <?php else: ?>
                                         <tr>
-                                            <td colspan="5" class="p-16 text-center text-gray-400 font-bold">ไม่พบข้อมูลรายการเงินในช่วงนี้</td>
+                                            <td colspan="6" class="p-16 text-center text-gray-400 font-bold">ไม่พบข้อมูลรายการเงินในช่วงนี้</td>
                                         </tr>
                                     <?php endif; ?>
                                 </tbody>
@@ -350,6 +373,103 @@ if (!empty($start_date) && !empty($end_date)) {
     </main>
 
     <script>
+        // ฟังก์ชันเลือกทั้งหมด / ยกเลิกเลือกทั้งหมด
+        function toggleSelectAll(source) {
+            const checkboxes = document.querySelectorAll('.row-checkbox');
+            checkboxes.forEach(cb => cb.checked = source.checked);
+        }
+
+        // ฟังก์ชันพิมพ์รายการที่เลือก
+        function printSelectedItems() {
+            const selected = document.querySelectorAll('.row-checkbox:checked');
+            if (selected.length === 0) {
+                alert('กรุณาเลือกรายการที่ต้องการพิมพ์อย่างน้อย 1 รายการครับ');
+                return;
+            }
+
+            let rowsHtml = '';
+            let totalIncome = 0;
+            let totalExpense = 0;
+
+            selected.forEach((cb, index) => {
+                const date = cb.dataset.date;
+                const type = cb.dataset.type;
+                const note = cb.dataset.note;
+                const amount = cb.dataset.amount;
+                const rawAmount = parseFloat(cb.dataset.rawAmount) || 0;
+
+                if (rawAmount >= 0) {
+                    totalIncome += rawAmount;
+                } else {
+                    totalExpense += Math.abs(rawAmount);
+                }
+
+                rowsHtml += `
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center;">${index + 1}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center;">${date}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${type}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${note}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold; color: ${rawAmount >= 0 ? '#059669' : '#e11d48'};">${amount}</td>
+                    </tr>
+                `;
+            });
+
+            const netTotal = totalIncome - totalExpense;
+
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>รายงานสรุปรายการการเงิน - ล่องแพหนองกวาก</title>
+                    <style>
+                        body { font-family: 'Sarabun', sans-serif; margin: 30px; color: #1e293b; }
+                        h2 { text-align: center; margin-bottom: 5px; color: #0f172a; }
+                        p { text-align: center; margin-top: 0; color: #64748b; font-size: 13px; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 25px; font-size: 13px; }
+                        th { background-color: #f1f5f9; padding: 12px; border-bottom: 2px solid #cbd5e1; text-align: left; color: #475569; }
+                        .text-right { text-align: right; }
+                        .text-center { text-align: center; }
+                        .summary-box { margin-top: 25px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px 20px; border-radius: 12px; font-size: 14px; }
+                        .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+                        .summary-row:last-child { margin-bottom: 0; border-top: 1px solid #cbd5e1; padding-top: 8px; font-weight: bold; font-size: 16px; }
+                    </style>
+                </head>
+                <body>
+                    <h2>รายงานสรุปรายการการเงิน (เฉพาะรายการที่เลือก)</h2>
+                    <p>ล่องแพหนองกวาก จ.หนองคาย | พิมพ์เมื่อ: ${new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="text-center" style="width: 50px;">ลำดับ</th>
+                                <th class="text-center" style="width: 100px;">วันที่</th>
+                                <th style="width: 140px;">ประเภท</th>
+                                <th>รายละเอียด</th>
+                                <th class="text-right" style="width: 120px;">จำนวนเงิน</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                    
+                    <div class="summary-box">
+                        <div style="margin-bottom: 5px;"><strong>รวมรายรับทั้งหมด:</strong> <span style="color: #059669;">+฿${totalIncome.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                        <div style="margin-bottom: 5px;"><strong>รวมรายจ่ายทั้งหมด:</strong> <span style="color: #e11d48;">-฿${totalExpense.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                        <div style="border-top: 1px solid #cbd5e1; margin-top: 8px; padding-top: 8px;"><strong>คงเหลือสุทธิ:</strong> <span style="color: ${netTotal >= 0 ? '#059669' : '#e11d48'};">฿${netTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+                    </div>
+
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                        }
+                    </script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+
         const expensePriceMap = {
             'ค่าเรือลาก': 100,
             'ค่าล้างทำความสะอาดแพ': 100,
