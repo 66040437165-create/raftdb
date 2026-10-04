@@ -30,16 +30,11 @@ if ($conn) {
     }
 }
 
-// เลือกว่าใช้คอลัมน์ราคาใด
 $price_field = in_array('total_amount', $b_cols) ? 'b.total_amount' : (in_array('total_price', $b_cols) ? 'b.total_price' : (in_array('raft_price', $b_cols) ? 'b.raft_price' : '0'));
-
-// เลือกว่าใช้คอลัมน์วันที่ใด
 $date_col = in_array('check_in_date', $b_cols) ? 'check_in_date' : (in_array('check_in', $b_cols) ? 'check_in' : (in_array('booking_date', $b_cols) ? 'booking_date' : 'created_at'));
 
-// นิพจน์สำหรับแปลงวันที่อย่างปลอดภัยใน PostgreSQL (ป้องกัน Error กรณี 0000-00-00 หรือค่าว่าง)
 $date_safe_expr = "(CASE WHEN b.$date_col IS NOT NULL AND b.$date_col::text ~ '^\d{4}-\d{2}-\d{2}' AND b.$date_col::text !~ '^0000' THEN b.$date_col::date ELSE NULL END)";
 
-// ตรวจสอบคอลัมน์ข้อมูลลูกค้า
 $has_guest_name  = in_array('guest_name', $b_cols);
 $has_guest_tel   = in_array('guest_tel', $b_cols);
 $has_guest_email = in_array('guest_email', $b_cols);
@@ -48,10 +43,9 @@ $phone_expr = $has_guest_tel ? "COALESCE(NULLIF(TRIM(b.guest_tel), ''), c.phone,
 $name_expr  = $has_guest_name ? "COALESCE(NULLIF(TRIM(b.guest_name), ''), c.full_name, 'ลูกค้าทั่วไป')" : "COALESCE(c.full_name, 'ลูกค้าทั่วไป')";
 $email_expr = $has_guest_email ? "COALESCE(NULLIF(TRIM(b.guest_email), ''), c.email, '')" : "COALESCE(c.email, '')";
 
-// รับค่าแท็บปัจจุบัน
-$selected_tab = $_GET['tab'] ?? 'all'; // all, sales, popularity, status, customers
+$selected_tab = $_GET['tab'] ?? 'all';
 
-// ดึงปีทั้งหมดที่มีการจองในระบบเพื่อทำตัวเลือกปี
+// ดึงปีทั้งหมดที่มีการจอง
 $years = [];
 if ($conn) {
     $years_sql = "SELECT DISTINCT EXTRACT(YEAR FROM $date_safe_expr)::int as yr 
@@ -68,21 +62,19 @@ if ($conn) {
     }
 }
 
-// กำหนดปีเริ่มต้น: หากมีข้อมูล ให้ใช้ปีล่าสุดที่มีข้อมูลในระบบ
 $default_year = !empty($years) ? $years[0] : (int)date('Y');
 if (empty($years)) {
     $years[] = (int)date('Y');
 }
 
 // ----------------------------------------------------
-// 1. เงื่อนไขฟิลเตอร์สำหรับรายงานยอดจองและรายได้
+// 1. เงื่อนไขฟิลเตอร์
 // ----------------------------------------------------
 $filter_date   = isset($_GET['filter_date']) ? trim($_GET['filter_date']) : '';
 $filter_month  = isset($_GET['filter_month']) ? trim($_GET['filter_month']) : '';
 $filter_year   = isset($_GET['filter_year']) && !empty($_GET['filter_year']) ? (int)$_GET['filter_year'] : $default_year;
-$filter_status = isset($_GET['filter_status']) ? trim($_GET['filter_status']) : 'all'; // 'confirmed' หรือ 'all'
+$filter_status = isset($_GET['filter_status']) ? trim($_GET['filter_status']) : 'all';
 
-// ตรวจสอบเงื่อนไขสถานะการจอง
 $status_conditions = [];
 $has_status_id = in_array('status_id', $b_cols);
 $has_status    = in_array('status', $b_cols);
@@ -91,7 +83,6 @@ if ($filter_status === 'confirmed') {
     if ($has_status_id) $status_conditions[] = "b.status_id IN (2, 4)";
     if ($has_status)    $status_conditions[] = "LOWER(TRIM(COALESCE(b.status, ''))) IN ('confirmed', 'completed', 'paid', 'approved', 'success', '2', '4')";
 } else {
-    // โหมด 'all' (นับทุกรายการ ยกเว้นที่กดยกเลิก)
     if ($has_status_id) $status_conditions[] = "b.status_id != 3";
     if ($has_status)    $status_conditions[] = "LOWER(TRIM(COALESCE(b.status, ''))) NOT IN ('cancelled', 'rejected', '3')";
 }
@@ -101,7 +92,6 @@ $sales_where = "WHERE $status_sql AND $date_safe_expr IS NOT NULL";
 
 $months = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
 
-// กรองตามวัน / เดือน / ปี
 if ($filter_date !== '') {
     $safe_fdate = pg_escape_string($conn, $filter_date);
     $sales_where .= " AND $date_safe_expr = '$safe_fdate'";
@@ -113,17 +103,11 @@ if ($filter_date !== '') {
     $sales_where .= " AND EXTRACT(YEAR FROM $date_safe_expr)::int = $filter_year";
 }
 
-// ----------------------------------------------------
-// สรุปยอดรวม (Total Count & Total Revenue)
-// ----------------------------------------------------
+// สรุปยอดรวม
 $total_bookings_count = 0;
 $total_bookings_revenue = 0;
 if ($conn) {
-    $summary_sql = "SELECT 
-                        COUNT(b.id) as total_count,
-                        COALESCE(SUM($price_field), 0) as total_revenue
-                    FROM bookings b
-                    $sales_where";
+    $summary_sql = "SELECT COUNT(b.id) as total_count, COALESCE(SUM($price_field), 0) as total_revenue FROM bookings b $sales_where";
     $summary_query = @pg_query($conn, $summary_sql);
     if ($summary_query && $res = pg_fetch_assoc($summary_query)) {
         $total_bookings_count = (int)$res['total_count'];
@@ -131,29 +115,13 @@ if ($conn) {
     }
 }
 
-// ----------------------------------------------------
-// แจกแจงยอดขายตามวันหรือเดือน สำหรับตารางและกราฟ
-// ----------------------------------------------------
+// แจกแจงยอดขาย
 $breakdown_rows = [];
 if ($conn) {
     if ($filter_date !== '' || $filter_month !== '') {
-        $breakdown_sql = "SELECT 
-                            ($date_safe_expr)::text as label,
-                            COUNT(b.id) as count,
-                            COALESCE(SUM($price_field), 0) as revenue
-                          FROM bookings b
-                          $sales_where
-                          GROUP BY $date_safe_expr
-                          ORDER BY label ASC";
+        $breakdown_sql = "SELECT ($date_safe_expr)::text as label, COUNT(b.id) as count, COALESCE(SUM($price_field), 0) as revenue FROM bookings b $sales_where GROUP BY $date_safe_expr ORDER BY label ASC";
     } else {
-        $breakdown_sql = "SELECT 
-                            EXTRACT(MONTH FROM $date_safe_expr)::int as label,
-                            COUNT(b.id) as count,
-                            COALESCE(SUM($price_field), 0) as revenue
-                          FROM bookings b
-                          $sales_where
-                          GROUP BY EXTRACT(MONTH FROM $date_safe_expr)
-                          ORDER BY label ASC";
+        $breakdown_sql = "SELECT EXTRACT(MONTH FROM $date_safe_expr)::int as label, COUNT(b.id) as count, COALESCE(SUM($price_field), 0) as revenue FROM bookings b $sales_where GROUP BY EXTRACT(MONTH FROM $date_safe_expr) ORDER BY label ASC";
     }
     $breakdown_query = @pg_query($conn, $breakdown_sql);
     if ($breakdown_query) {
@@ -163,8 +131,8 @@ if ($conn) {
     }
 }
 
-$chart_sales_labels  = [];
-$chart_sales_count   = [];
+$chart_sales_labels = [];
+$chart_sales_count = [];
 $chart_sales_revenue = [];
 foreach ($breakdown_rows as $row) {
     if ($filter_date !== '' || $filter_month !== '') {
@@ -173,14 +141,12 @@ foreach ($breakdown_rows as $row) {
         $m_idx = (int)$row['label'] - 1;
         $label_display = ($months[$m_idx] ?? '') . " " . ($filter_year + 543);
     }
-    $chart_sales_labels[]  = $label_display;
-    $chart_sales_count[]   = (int)$row['count'];
+    $chart_sales_labels[] = $label_display;
+    $chart_sales_count[] = (int)$row['count'];
     $chart_sales_revenue[] = (float)$row['revenue'];
 }
 
-// ----------------------------------------------------
 // 2. สถิติแพยอดนิยม
-// ----------------------------------------------------
 $popularity_rows = [];
 if ($conn) {
     $pop_sql = "SELECT r.id as raft_id, r.name as raft_name, r.capacity, r.price_per_day,
@@ -198,18 +164,16 @@ if ($conn) {
     }
 }
 
-$chart_pop_labels  = [];
-$chart_pop_count   = [];
+$chart_pop_labels = [];
+$chart_pop_count = [];
 $chart_pop_revenue = [];
 foreach ($popularity_rows as $row) {
-    $chart_pop_labels[]  = $row['raft_name'];
-    $chart_pop_count[]   = (int)$row['total_bookings'];
+    $chart_pop_labels[] = $row['raft_name'];
+    $chart_pop_count[] = (int)$row['total_bookings'];
     $chart_pop_revenue[] = (float)$row['total_revenue'];
 }
 
-// ----------------------------------------------------
 // 3. สถิติสถานะแพ
-// ----------------------------------------------------
 $status_rows = [];
 $stats_available = 0;
 $stats_busy = 0;
@@ -222,7 +186,6 @@ if ($conn) {
             $status_rows[] = $row;
         }
     }
-
     $q_av = @pg_query($conn, "SELECT COUNT(*) as total FROM rafts WHERE status = 'available'");
     $stats_available = ($q_av && $r = pg_fetch_assoc($q_av)) ? (int)$r['total'] : 0;
 
@@ -233,9 +196,7 @@ if ($conn) {
     $stats_maintenance = ($q_ma && $r = pg_fetch_assoc($q_ma)) ? (int)$r['total'] : 0;
 }
 
-// ----------------------------------------------------
-// 4. สถิติลูกค้าและยอดสะสม
-// ----------------------------------------------------
+// 4. สถิติลูกค้า
 $cust_search = isset($_GET['cust_search']) ? trim($_GET['cust_search']) : '';
 $customers_rows = [];
 
@@ -272,10 +233,10 @@ if ($conn) {
 }
 
 $chart_cust_labels = [];
-$chart_cust_spent  = [];
+$chart_cust_spent = [];
 foreach (array_slice($customers_rows, 0, 10) as $row) {
     $chart_cust_labels[] = $row['customer_name'] ?: 'ลูกค้าทั่วไป';
-    $chart_cust_spent[]  = (float)$row['total_spent'];
+    $chart_cust_spent[] = (float)$row['total_spent'];
 }
 ?>
 <!DOCTYPE html>
@@ -283,7 +244,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>รายงานวิเคราะห์ระบบ - ChillRaft Admin</title>
+    <title>รายงานวิเคราะห์ระบบ - ล่องแพหนองกวาก</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -296,6 +257,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
             .no-print { display: none !important; }
             .print-area { display: block !important; width: 100% !important; margin: 0 !important; padding: 0 !important; }
             .print-card { border: none !important; box-shadow: none !important; padding: 0 !important; }
+            aside, header { display: none !important; }
         }
     </style>
 </head>
@@ -324,7 +286,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                 </div>
             </div>
             <div>
-                <button onclick="window.print()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-xl shadow-lg transition flex items-center gap-2 text-sm">
+                <button onclick="window.print()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-lg transition flex items-center gap-2 text-sm">
                     <i class="fa fa-print"></i> พิมพ์รายงาน
                 </button>
             </div>
@@ -351,7 +313,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                 </a>
             </div>
 
-            <!-- กล่องควบคุมฟิลเตอร์ (แสดงในแท็บ all และ sales) -->
+            <!-- กล่องควบคุมฟิลเตอร์ -->
             <?php if (in_array($selected_tab, ['all', 'sales'])): ?>
                 <div class="no-print bg-white p-5 rounded-2xl mb-8 border border-slate-200/80 shadow-sm">
                     <form method="GET" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
@@ -382,13 +344,13 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                         </div>
 
                         <div>
-                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-xl shadow-md transition text-sm">
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-xl shadow-md transition text-sm">
                                 <i class="fa fa-filter mr-1"></i> กรองรายงาน
                             </button>
                         </div>
 
                         <div>
-                            <a href="manage_reports.php?tab=<?php echo $selected_tab; ?>" class="w-full flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-4 rounded-xl transition text-sm">
+                            <a href="manage_reports.php?tab=<?php echo $selected_tab; ?>" class="w-full flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 px-4 rounded-xl transition text-sm">
                                 ล้างตัวกรอง
                             </a>
                         </div>
@@ -396,10 +358,9 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                 </div>
             <?php endif; ?>
 
-            <!-- TAB ALL: ภาพรวมทั้งหมด -->
+            <!-- TAB ALL -->
             <?php if ($selected_tab === 'all'): ?>
                 <div class="space-y-8 mb-8">
-                    <!-- Cards สรุปตัวเลข -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
                             <div>
@@ -434,7 +395,6 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                         </div>
                     </div>
 
-                    <!-- 4 Charts Grid -->
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div class="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
                             <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
@@ -471,7 +431,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                 </div>
             <?php endif; ?>
 
-            <!-- TAB 1: SALES & REVENUE REPORT -->
+            <!-- TAB 1: SALES -->
             <?php if ($selected_tab === 'sales'): ?>
                 <div class="print-card bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 mb-8">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -571,7 +531,7 @@ foreach (array_slice($customers_rows, 0, 10) as $row) {
                 </div>
             <?php endif; ?>
 
-            <!-- TAB 3: RAFT STATUS -->
+            <!-- TAB 3: STATUS -->
             <?php if ($selected_tab === 'status'): ?>
                 <div class="print-card bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 mb-8">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 font-bold">
