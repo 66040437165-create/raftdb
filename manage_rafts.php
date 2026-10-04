@@ -226,13 +226,13 @@ if (isset($_GET['delete_id'])) {
     }
 }
 
-// 4. รับค่าคำค้นหา
+// 4. รับค่าคำค้นหา (ปรับปรุงให้รองรับการค้นหาชื่อ, รหัส, และรายละเอียดแพ)
 $search_query = "";
 $search_param = "";
 $search_params = [];
 if (isset($_GET['search']) && trim($_GET['search']) !== '') {
     $search_param = trim($_GET['search']);
-    $search_query = " WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ";
+    $search_query = " WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1 OR COALESCE(r.description, '') ILIKE $1) ";
     $search_params[] = '%' . $search_param . '%';
 }
 
@@ -255,7 +255,6 @@ $total_pages = ceil($total_rows / $limit);
 // 6. ดึงข้อมูลแพ
 $rafts = [];
 if ($conn) {
-    // 🟢 เช็คก่อนว่ามีตาราง raft_types หรือไม่
     $chk_types = @pg_query($conn, "SELECT to_regclass('public.raft_types')");
     $has_types = ($chk_types && ($r_tbl = pg_fetch_row($chk_types)) && !empty($r_tbl[0]));
 
@@ -268,12 +267,10 @@ if ($conn) {
     }
 
     if (!empty($search_params)) {
-        // ใช้ $2 และ $3 สำหรับ LIMIT และ OFFSET
-        $sql = "$base_sql WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ORDER BY r.id DESC LIMIT $2 OFFSET $3";
+        $sql = "$base_sql $search_query ORDER BY r.id DESC LIMIT $2 OFFSET $3";
         $params_with_limit = array_merge($search_params, [$limit, $offset]);
         $result = @pg_query_params($conn, $sql, $params_with_limit);
     } else {
-        // ถ้าไม่มีการค้นหา ใช้แค่ $1 และ $2
         $sql = "$base_sql ORDER BY r.id DESC LIMIT $1 OFFSET $2";
         $result = @pg_query_params($conn, $sql, [$limit, $offset]);
     }
@@ -283,7 +280,6 @@ if ($conn) {
             $rafts[] = $row;
         }
     } else {
-        // Fallback: ถ้า Query หลักพัง ให้ลองดึงแบบธรรมดา
         $fallback_sql = "SELECT * FROM rafts ORDER BY id DESC LIMIT $1 OFFSET $2";
         $result_fb = @pg_query_params($conn, $fallback_sql, [$limit, $offset]);
         if ($result_fb) {
@@ -368,7 +364,7 @@ if ($conn) {
                     <form method="GET" action="manage_rafts.php" class="w-full md:w-96 relative flex items-center">
                         <i class="fa fa-search absolute left-4 text-slate-400"></i>
                         <input type="text" name="search" value="<?php echo htmlspecialchars($search_param); ?>" 
-                               placeholder="ค้นหาชื่อแพ หรือ รหัสแพ..." 
+                               placeholder="ค้นหาชื่อแพ, รหัสแพ หรือรายละเอียด..." 
                                class="w-full pl-10 pr-10 py-3 rounded-2xl border border-slate-200 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition shadow-sm font-bold text-slate-700">
                         
                         <?php if (!empty($search_param)): ?>
