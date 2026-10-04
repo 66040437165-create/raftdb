@@ -24,7 +24,6 @@ if ($is_logged_in && $conn) {
         $user_fullname = '';
         $user_tel = '';
     } else {
-        // ดึงข้อมูลผู้ใช้จากตาราง users
         $user_res = @pg_query_params($conn, "SELECT * FROM users WHERE id = $1 LIMIT 1", array($user_id));
         if ($user_res && pg_num_rows($user_res) > 0) {
             $user_data = pg_fetch_assoc($user_res);
@@ -62,10 +61,30 @@ if (!$raft) {
     exit(); 
 }
 
+// 🟢 ฟังก์ชันจัดการ URL รูปภาพให้รองรับ Base64 และไฟล์ปกติ
+function get_valid_image_url($img_val) {
+    $img_val = trim($img_val ?? '');
+    if (empty($img_val)) return '';
+
+    // ถ้ารูปเป็น Base64 หรือ http ให้ส่งค่ากลับไปตรงๆ
+    if (preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
+        return $img_val;
+    }
+
+    // ถ้ารูปเป็นแค่ชื่อไฟล์ ให้เช็คว่าไฟล์มีจริงไหม แล้วเติม uploads/ ให้
+    $target_dir = __DIR__ . "/uploads/";
+    $clean_name = basename($img_val);
+    if (file_exists($target_dir . $clean_name)) {
+        return 'uploads/' . $clean_name;
+    }
+
+    return '';
+}
+
 // ดึงรูปภาพทั้งหมด
 $images = [];
 
-// 2.1 ตรวจสอบและดึงจากตาราง raft_images (ถ้ามีตาราง)
+// 2.1 ตรวจสอบและดึงจากตาราง raft_images (ถ้ามี)
 if ($conn) {
     $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
     $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
@@ -73,22 +92,27 @@ if ($conn) {
         $res_imgs = @pg_query_params($conn, "SELECT image_path, is_main FROM raft_images WHERE raft_id = $1 ORDER BY is_main DESC", array($raft_id));
         if ($res_imgs && pg_num_rows($res_imgs) > 0) {
             while ($img = pg_fetch_assoc($res_imgs)) {
-                $images[] = $img;
+                $valid_url = get_valid_image_url($img['image_path']);
+                if (!empty($valid_url)) {
+                    $images[] = ['image_path' => $valid_url];
+                }
             }
         }
     }
 }
 
-// 2.2 ถ้าใน raft_images ไม่มี ให้ดึงจากคอลัมน์ featured_image และ image_1 ถึง image_5
+// 2.2 ถ้าไม่มีใน raft_images ให้ดึงจากคอลัมน์ของแพ
 if (empty($images)) {
-    if (!empty($raft['featured_image'])) {
-        $images[] = ['image_path' => $raft['featured_image'], 'is_main' => 1];
+    $valid_featured = get_valid_image_url($raft['featured_image']);
+    if (!empty($valid_featured)) {
+        $images[] = ['image_path' => $valid_featured, 'is_main' => 1];
     }
     
     for ($i = 1; $i <= 5; $i++) {
         $col_name = "image_" . $i;
-        if (!empty($raft[$col_name])) {
-            $images[] = ['image_path' => $raft[$col_name], 'is_main' => 0];
+        $valid_img = get_valid_image_url($raft[$col_name] ?? '');
+        if (!empty($valid_img)) {
+            $images[] = ['image_path' => $valid_img, 'is_main' => 0];
         }
     }
 }
@@ -136,25 +160,27 @@ if (empty($_GET['checkin_time'])) {
     <div class="max-w-2xl mx-auto bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-gray-100 mb-10">
         <div class="relative group">
             <!-- Main Image -->
-            <div class="h-64 md:h-80 relative overflow-hidden cursor-pointer" onclick="openLightbox(currentGalleryIndex)">
+            <div class="h-64 md:h-80 relative overflow-hidden <?php echo !empty($main_image) ? 'cursor-pointer' : ''; ?>" <?php echo !empty($main_image) ? 'onclick="openLightbox(0)"' : ''; ?>>
                 <?php if (!empty($main_image)): ?>
-                    <img id="mainBookingImage" src="uploads/<?php echo htmlspecialchars($main_image); ?>" class="w-full h-full object-cover transition-all duration-500 group-hover:scale-105">
+                    <img id="mainBookingImage" src="<?php echo htmlspecialchars($main_image); ?>" class="w-full h-full object-cover transition-all duration-500 group-hover:scale-105">
                 <?php else: ?>
-                    <div class="w-full h-full bg-slate-200 flex items-center justify-center text-slate-400 font-bold">ไม่มีรูปภาพ</div>
+                    <img id="mainBookingImage" src="https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80" class="w-full h-full object-cover opacity-70">
                 <?php endif; ?>
-                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/30"></div>
+                <div class="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/30 to-black/30"></div>
                 
                 <!-- Gallery badge -->
+                <?php if (!empty($main_image)): ?>
                 <div class="absolute top-4 right-4 bg-black/60 backdrop-blur-md text-white text-[11px] font-bold px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-lg border border-white/20 hover:bg-blue-600 transition">
                     <i class="fa fa-images text-yellow-400"></i>
                     <span id="galleryBadgeText">📷 1/<?php echo count($images) > 0 ? count($images) : 1; ?> (ขยายรูป)</span>
                 </div>
+                <?php endif; ?>
 
                 <div class="absolute bottom-6 left-8 right-8 flex justify-between items-end">
                     <div>
                         <span class="bg-blue-600 text-white text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest mb-2 inline-block shadow-lg shadow-blue-500/30">ยืนยันการจอง</span>
                         <h1 class="text-3xl font-black text-white"><?php echo htmlspecialchars($raft['name']); ?></h1>
-                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $raft['capacity']; ?> ท่าน</p>
+                        <p class="text-blue-100 text-xs mt-0.5"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $raft['capacity'] ?? '-'; ?> ท่าน</p>
                     </div>
                 </div>
             </div>
@@ -164,7 +190,7 @@ if (empty($_GET['checkin_time'])) {
                 <div class="flex gap-2 p-3 bg-slate-900/90 backdrop-blur-md overflow-x-auto no-scrollbar scroll-smooth">
                     <?php foreach ($images as $index => $img): ?>
                         <div class="shrink-0 cursor-pointer group" onclick="setGalleryIndex(<?php echo $index; ?>)">
-                            <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
+                            <img src="<?php echo htmlspecialchars($img['image_path']); ?>" 
                                  class="main-thumb-item w-20 h-16 md:w-24 md:h-20 object-cover rounded-xl border-2 <?php echo ($index == 0) ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'; ?> transition-all duration-300"
                                  data-index="<?php echo $index; ?>">
                         </div>
@@ -192,7 +218,6 @@ if (empty($_GET['checkin_time'])) {
                 <!-- Section 1: Guest Information & LINE Alert Status -->
                 <div class="bg-slate-50 p-6 rounded-3xl border border-slate-100">
                     
-                    <!-- ส่วนแจ้งเตือนสถานะ LINE -->
                     <?php if (!empty($line_user_id)): ?>
                         <div class="mb-5 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between gap-3 shadow-sm">
                             <div class="flex items-center gap-3">
@@ -201,12 +226,9 @@ if (empty($_GET['checkin_time'])) {
                                 </div>
                                 <div>
                                     <p class="text-xs font-black text-emerald-800">เชื่อมต่อ LINE รับแจ้งเตือนแล้ว</p>
-                                    <p class="text-[11px] text-emerald-600 font-semibold">บอทจะส่งใบยืนยันการจองเข้า LINE ของคุณทันทีหลังบันทึกรายการ</p>
+                                    <p class="text-[11px] text-emerald-600 font-semibold">บอทจะส่งใบยืนยันเข้า LINE อัตโนมัติหลังบันทึกรายการ</p>
                                 </div>
                             </div>
-                            <span class="bg-emerald-200/70 text-emerald-800 text-[10px] font-black px-3 py-1 rounded-full shrink-0">
-                                <i class="fa fa-check-circle"></i> เปิดแจ้งเตือน
-                            </span>
                         </div>
                     <?php else: ?>
                         <div class="mb-5 p-5 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl text-white shadow-lg shadow-emerald-200/50 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -216,11 +238,11 @@ if (empty($_GET['checkin_time'])) {
                                 </div>
                                 <div>
                                     <h4 class="font-black text-sm">ต้องการรับใบยืนยันการจองผ่าน LINE ไหม?</h4>
-                                    <p class="text-[11px] text-emerald-100 mt-0.5">กดเข้าสู่ระบบด้วย LINE เพื่อให้ระบบส่งสรุปยอดและเลขบัญชีเข้าแชทคุณอัตโนมัติ</p>
+                                    <p class="text-[11px] text-emerald-100 mt-0.5">กดเข้าสู่ระบบด้วย LINE เพื่อให้ระบบส่งสรุปยอดอัตโนมัติ</p>
                                 </div>
                             </div>
                             <a href="line_login.php" class="w-full sm:w-auto bg-white text-emerald-700 hover:bg-emerald-50 font-black px-4 py-2.5 rounded-xl text-xs transition shadow-md flex items-center justify-center gap-1.5 shrink-0 active:scale-95">
-                                <i class="fab fa-line text-lg text-[#06C755]"></i> เข้าสู่ระบบด้วย LINE
+                                <i class="fab fa-line text-lg text-[#06C755]"></i> ล็อกอินด้วย LINE
                             </a>
                         </div>
                     <?php endif; ?>
@@ -338,6 +360,7 @@ if (empty($_GET['checkin_time'])) {
     </div>
 
     <!-- Fullscreen Interactive Lightbox Gallery Modal -->
+    <?php if (!empty($images)): ?>
     <div id="lightboxModal" class="fixed inset-0 bg-black/95 backdrop-blur-md z-50 hidden flex flex-col justify-between p-4 md:p-8 select-none transition-opacity duration-300">
         <div class="flex justify-between items-center text-white z-10">
             <div class="flex items-center gap-3">
@@ -368,7 +391,7 @@ if (empty($_GET['checkin_time'])) {
         <?php if (count($images) > 1): ?>
             <div class="flex justify-center gap-2 overflow-x-auto py-2 no-scrollbar max-w-full">
                 <?php foreach ($images as $idx => $img): ?>
-                    <img src="uploads/<?php echo htmlspecialchars($img['image_path']); ?>" 
+                    <img src="<?php echo htmlspecialchars($img['image_path']); ?>" 
                          onclick="setLightboxImage(<?php echo $idx; ?>)"
                          class="lightbox-thumb-item w-14 h-14 md:w-16 md:h-16 object-cover rounded-xl border-2 cursor-pointer transition opacity-50 hover:opacity-100 shrink-0" 
                          data-index="<?php echo $idx; ?>">
@@ -376,14 +399,16 @@ if (empty($_GET['checkin_time'])) {
             </div>
         <?php endif; ?>
     </div>
+    <?php endif; ?>
 
     <script>
+        // 🟢 แก้ไขการส่งออกค่ารูปภาพไปยัง JavaScript ไม่ให้ถูกเติม 'uploads/' มั่วๆ
         const galleryImages = <?php 
             $js_imgs = [];
             foreach ($images as $i) { 
-                $js_imgs[] = 'uploads/' . $i['image_path']; 
+                $js_imgs[] = $i['image_path']; 
             }
-            echo json_encode(!empty($js_imgs) ? $js_imgs : ["uploads/" . $main_image]); 
+            echo json_encode(!empty($js_imgs) ? $js_imgs : ["https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=800&q=80"]); 
         ?>;
         let currentGalleryIndex = 0;
 
@@ -501,17 +526,22 @@ if (empty($_GET['checkin_time'])) {
         }
 
         function openLightbox(index = 0) {
+            if (galleryImages.length === 0 || galleryImages[0].includes('unsplash')) return;
             currentGalleryIndex = index;
             updateLightboxView();
             const modal = document.getElementById('lightboxModal');
-            modal.classList.remove('hidden');
-            document.body.style.overflow = 'hidden';
+            if(modal) {
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            }
         }
 
         function closeLightbox() {
             const modal = document.getElementById('lightboxModal');
-            modal.classList.add('hidden');
-            document.body.style.overflow = '';
+            if(modal) {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+            }
         }
 
         function setLightboxImage(index) {
