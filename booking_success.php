@@ -185,16 +185,26 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
                         
-                        <!-- 🟢 โหลดรูปแพตรงนี้ -->
+                        <!-- 🟢 โหลดรูปแพ (ใช้ Base64 ทะลวงบล็อกเช่นกัน) -->
                         <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
                             <?php 
                             $displayImg = '';
                             if (!empty($booking['featured_image'])) {
                                 $raw_img = trim($booking['featured_image']);
-                                // ตัดคำว่า uploads/ หรือ ./ ออกให้หมด
                                 $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $raw_img), '/');
-                                // ประกอบ path ใหม่ที่ถูกต้อง (เติม / ข้างหน้าเพื่อให้เริ่มหาจาก root เสมอ)
-                                $displayImg = '/uploads/' . $clean_name;
+                                
+                                $raft_file_path = __DIR__ . '/uploads/' . $clean_name;
+                                $displayImg = 'uploads/' . $clean_name; // ค่าเริ่มต้น
+                                
+                                // ถ้าหาไฟล์เจอ แปลงเป็น Base64
+                                if (file_exists($raft_file_path)) {
+                                    $raft_data = @file_get_contents($raft_file_path);
+                                    if ($raft_data !== false) {
+                                        $ext = strtolower(pathinfo($raft_file_path, PATHINFO_EXTENSION));
+                                        $mime = ($ext == 'png') ? 'image/png' : 'image/jpeg';
+                                        $displayImg = 'data:' . $mime . ';base64,' . base64_encode($raft_data);
+                                    }
+                                }
                             }
                             ?>
                             
@@ -300,15 +310,25 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     </span>
                                 </div>
                                 
-                                <!-- 🟢 โหลดรูปลสิปของจริง (เพิ่ม / นำหน้าเพื่อเริ่มหาจาก Root เสมอ) -->
+                                <!-- 🟢 โหลดรูปลสิปของจริง (ใช้เทคนิค Base64 ทะลวงบล็อกโฮสต์) -->
                                 <div class="text-center">
                                     <?php 
                                     $clean_slip = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|slips\/|\/)+/i', '', $slip_img), '/');
-                                    // 🟢 เพิ่ม / นำหน้าเพื่อป้องกัน Path เพี้ยน
-                                    $final_slip_url = '/uploads/' . $clean_slip;
+                                    $file_path = __DIR__ . '/uploads/' . $clean_slip;
+                                    $img_src = 'uploads/' . $clean_slip; // ค่าเริ่มต้น
+                                    
+                                    // ถ้า PHP มองเห็นไฟล์บนเซิร์ฟเวอร์ ให้ดึงข้อมูลภาพมาฝังใน HTML เลย
+                                    if (file_exists($file_path)) {
+                                        $img_data = @file_get_contents($file_path);
+                                        if ($img_data !== false) {
+                                            $ext = strtolower(pathinfo($file_path, PATHINFO_EXTENSION));
+                                            $mime = ($ext == 'png') ? 'image/png' : 'image/jpeg';
+                                            $img_src = 'data:' . $mime . ';base64,' . base64_encode($img_data);
+                                        }
+                                    }
                                     ?>
                                     
-                                    <img src="<?php echo htmlspecialchars($final_slip_url); ?>" 
+                                    <img src="<?php echo htmlspecialchars($img_src); ?>" 
                                          class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white"
                                          alt="หลักฐานการชำระเงิน">
                                 </div>
