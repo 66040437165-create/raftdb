@@ -170,7 +170,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             if (defined('LINE_ADMIN_USER_ID')) { send_line_message(LINE_ADMIN_USER_ID, $admin_msg); }
 
             if (!empty($sess_line_id)) {
-                $cust_msg  = "🎉 ขอบคุณสำหรับการจอง ล่องแพหนองกวาก!\n━━━━━━━━━━━━━━━━\n📋 รหัส: {$booking_code}\n⛵ แพ: {$raft_name}\n📅 วันที่เข้าพัก: " . date('d/m/Y', strtotime($check_in_date)) . "\n⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n━━━━━━━━━━━━━━━━\n💳 บัญชี: ธ.กสิกรไทย 012-3-45678-9\nโปรดแนบสลิปเพื่อยืนยันคิวของคุณครับ 👇\nhttps://{$site_host}/booking_success.php?id={$booking_id}";
+                $cust_msg  = "🎉 ขอบคุณสำหรับการจองแพหนองกวาก!\n━━━━━━━━━━━━━━━━\n📋 รหัส: {$booking_code}\n⛵ แพ: {$raft_name}\n📅 วันที่เข้าพัก: " . date('d/m/Y', strtotime($check_in_date)) . "\n⏰ เวลา: {$check_in_time} - {$check_out_time} น.\n💰 ยอดชำระ: ฿" . number_format($total_price, 2) . "\n━━━━━━━━━━━━━━━━\n💳 บัญชี: ธ.กสิกรไทย 161-1-99653-1\nโปรดแนบสลิปเพื่อยืนยันคิวของคุณครับ 👇\nhttps://{$site_host}/booking_success.php?id={$booking_id}";
                 send_line_message($sess_line_id, $cust_msg);
             }
         }
