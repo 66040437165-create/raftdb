@@ -2,93 +2,174 @@
 session_start();
 require_once __DIR__ . '/db_config.php';
 
-// 1. ตรวจสอบสิทธิ์การเข้าใช้งาน (เฉพาะ Admin เท่านั้น)
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
+    header("Location: admin_dashboard.php?msg=access_denied");
     exit();
 }
 
-$is_admin = isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] === 1;
-if (!$is_admin) {
-    header("Location: admin_dashboard.php");
-    exit();
+// สร้างตาราง expenses อัตโนมัติสำหรับ PostgreSQL หากยังไม่มี
+if ($conn) {
+    @pg_query($conn, "CREATE TABLE IF NOT EXISTS expenses (
+        expense_id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        amount NUMERIC(10,2) NOT NULL,
+        expense_date DATE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
 }
 
 $today = date('Y-m-d');
 $this_month = date('Y-m');
 
-// 2. จัดการบันทึกรายจ่ายใหม่ (POST Request)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_expense') {
-    $title = trim($_POST['title'] ?? '');
-    $amount = floatval($_POST['amount'] ?? 0);
-    $expense_date = trim($_POST['expense_date'] ?? $today);
-
-    if (!empty($title) && $amount > 0) {
-        $stmt = pg_prepare($conn, "add_exp", "INSERT INTO expenses (title, amount, expense_date, created_at) VALUES ($1, $2, $3, NOW())");
-        pg_execute($conn, "add_exp", array($title, $amount, $expense_date));
-        header("Location: manage_finances.php?success=1");
-        exit();
+// 2. ระบบเพิ่มค่าใช้จ่าย (PostgreSQL Prepared Statement)
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_expense'])) {
+    $title = trim($_POST['title']);
+    $amount = floatval($_POST['amount']);
+    $date = !empty($_POST['expense_date']) ? $_POST['expense_date'] : $today;
+    
+    $res = @pg_query_params($conn, "INSERT INTO expenses (title, amount, expense_date) VALUES ($1, $2, $3)", array($title, $amount, $date));
+    
+    if ($res) {
+        header("Location: manage_finances.php?msg=success");
+    } else {
+        header("Location: manage_finances.php?msg=error");
     }
+    exit();
 }
 
-// 3. จัดการลบรายจ่าย
+// 3. ระบบลบค่าใช้จ่าย
 if (isset($_GET['delete_expense'])) {
-    $exp_id = intval($_GET['delete_expense']);
-    if ($exp_id > 0) {
-        pg_query_params($conn, "DELETE FROM expenses WHERE id = $1", array($exp_id));
-        header("Location: manage_finances.php?deleted=1");
-        exit();
-    }
+    $id = intval($_GET['delete_expense']);
+    @pg_query_params($conn, "DELETE FROM expenses WHERE expense_id = $1", array($id));
+    
+    header("Location: manage_finances.php?msg=deleted");
+    exit();
 }
 
-// 4. คำนวณสรุปยอดรายรับ - รายจ่าย (PostgreSQL Syntax)
-$income_today = 0;
-$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
-if ($res && $row = pg_fetch_assoc($res)) { $income_today = floatval($row['total']); }
+// 4. คำนวณสรุปยอดรายรับ และรายจ่าย (PostgreSQL Syntax)
+$income_where = "(status_id IN (2, 4) OR status IN ('confirmed', 'completed'))";
 
-$expense_today = 0;
-$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
-if ($res && $row = pg_fetch_assoc($res)) { $expense_today = floatval($row['total']); }
+// รายได้รวมค่าแพวันนี้
+$res_raft_today = @pg_query_params($conn, "SELECT COALESCE(SUM(raft_price), 0) AS total FROM bookings WHERE $income_where AND check_in_date = $1::date", array($today));
+$raft_income_today = ($res_raft_today && $row = pg_fetch_assoc($res_raft_today)) ? floatval($row['total']) : 0;
 
-$income_month = 0;
-$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
-if ($res && $row = pg_fetch_assoc($res)) { $income_month = floatval($row['total']); }
+// รายได้ชมรมวันนี้ (10%)
+$res_inc_today = @pg_query_params($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND check_in_date = $1::date", array($today));
+$income_today = ($res_inc_today && $row = pg_fetch_assoc($res_inc_today)) ? floatval($row['total']) : 0;
 
-$expense_month = 0;
-$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
-if ($res && $row = pg_fetch_assoc($res)) { $expense_month = floatval($row['total']); }
+// รายได้ชมรมเดือนนี้ (10%)
+$res_inc_month = @pg_query_params($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where AND TO_CHAR(check_in_date, 'YYYY-MM') = $1", array($this_month));
+$income_month = ($res_inc_month && $row = pg_fetch_assoc($res_inc_month)) ? floatval($row['total']) : 0;
 
-// 5. ดึงรายการรายรับล่าสุด (จาก Payments)
-$recent_incomes = pg_query($conn, "
-    SELECT p.*, b.booking_id, COALESCE(c.customer_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name
-    FROM payments p
-    LEFT JOIN bookings b ON p.booking_id = b.booking_id
-    LEFT JOIN customers c ON b.customer_id = c.id
-    WHERE p.status = 'confirmed'
-    ORDER BY p.paid_at DESC LIMIT 10
+// รายได้ชมรมสะสมทั้งหมด (10%)
+$res_inc_all = @pg_query($conn, "SELECT COALESCE(SUM(raft_price * 0.10), 0) AS total FROM bookings WHERE $income_where");
+$income_all = ($res_inc_all && $row = pg_fetch_assoc($res_inc_all)) ? floatval($row['total']) : 0;
+
+// รายจ่ายวันนี้
+$res_exp_today = @pg_query_params($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = $1::date", array($today));
+$expense_today = ($res_exp_today && $row = pg_fetch_assoc($res_exp_today)) ? floatval($row['total']) : 0;
+
+// รายจ่ายเดือนนี้
+$res_exp_month = @pg_query_params($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = $1", array($this_month));
+$expense_month = ($res_exp_month && $row = pg_fetch_assoc($res_exp_month)) ? floatval($row['total']) : 0;
+
+// 5. ดึงรายการรายรับจากตาราง bookings (ค่าคิว 10%)
+$booking_items = [];
+$res_b = @pg_query($conn, "
+    SELECT b.id, b.booking_code, b.raft_price, b.check_in_date, b.status_id, b.status, r.name as raft_name 
+    FROM bookings b 
+    LEFT JOIN rafts r ON b.raft_id = r.id 
+    WHERE b.status_id IN (2, 4) OR b.status IN ('confirmed', 'completed')
+    ORDER BY b.id DESC
 ");
 
-// 6. ดึงรายการรายจ่ายล่าสุด (จาก Expenses)
-$recent_expenses = pg_query($conn, "SELECT id, title, amount, expense_date FROM expenses ORDER BY expense_date DESC, id DESC LIMIT 10");
-?>
+if ($res_b) {
+    while ($r = pg_fetch_assoc($res_b)) {
+        $raft_price = floatval($r['raft_price']);
+        $queue_fee = $raft_price * 0.10; // คิดค่าคิว 10%
+        
+        $status_text = ((intval($r['status_id']) == 4) || ($r['status'] === 'completed')) ? 'เสร็จสิ้น' : 'ยืนยันแล้ว';
+        
+        $booking_items[] = [
+            'type'       => 'income',
+            'amount'     => $queue_fee,
+            'raft_total' => $raft_price,
+            'date'       => !empty($r['check_in_date']) ? $r['check_in_date'] : $today,
+            'note'       => 'ค่าคิวแพ (10%): ' . (!empty($r['raft_name']) ? $r['raft_name'] : 'แพทั่วไป'),
+            'ref_id'     => $r['id'],
+            'code'       => !empty($r['booking_code']) ? $r['booking_code'] : ('BK' . $r['id']),
+            'status'     => $status_text
+        ];
+    }
+}
 
+// 6. ดึงรายการรายจ่ายจากตาราง expenses
+$expense_items = [];
+$res_e = @pg_query($conn, "SELECT * FROM expenses ORDER BY expense_id DESC");
+if ($res_e) {
+    while ($r = pg_fetch_assoc($res_e)) {
+        $expense_items[] = [
+            'type'   => 'expense',
+            'amount' => floatval($r['amount']),
+            'date'   => $r['expense_date'],
+            'note'   => $r['title'],
+            'ref_id' => $r['expense_id'],
+            'code'   => '-',
+            'status' => 'จ่ายแล้ว'
+        ];
+    }
+}
+
+// รวมรายการทั้งหมดและเรียงลำดับตามวันที่ล่าสุด
+$all_transactions = array_merge($booking_items, $expense_items);
+usort($all_transactions, function($a, $b) {
+    return strtotime($b['date']) - strtotime($a['date']);
+});
+
+// 7. ระบบกรองข้อมูล (Filters)
+$filter = $_GET['filter'] ?? 'all';
+$start_date = $_GET['start_date'] ?? '';
+$end_date = $_GET['end_date'] ?? '';
+$filter_title = "รายการการเงินทั้งหมด (" . count($all_transactions) . " รายการ)";
+
+if (!empty($start_date) && !empty($end_date)) {
+    $all_transactions = array_filter($all_transactions, function($item) use ($start_date, $end_date) {
+        return $item['date'] >= $start_date && $item['date'] <= $end_date;
+    });
+    $filter_title = "รายการช่วงวันที่ " . date('d/m/Y', strtotime($start_date)) . " ถึง " . date('d/m/Y', strtotime($end_date));
+} else {
+    if ($filter == 'income_today') {
+        $all_transactions = array_filter($all_transactions, fn($item) => $item['type'] == 'income' && $item['date'] == $today);
+        $filter_title = "รายได้ค่าคิววันนี้";
+    } elseif ($filter == 'expense_today') {
+        $all_transactions = array_filter($all_transactions, fn($item) => $item['type'] == 'expense' && $item['date'] == $today);
+        $filter_title = "รายจ่ายวันนี้";
+    } elseif ($filter == 'income_month') {
+        $all_transactions = array_filter($all_transactions, fn($item) => $item['type'] == 'income' && strpos($item['date'], $this_month) === 0);
+        $filter_title = "รายได้ค่าคิวเดือนนี้";
+    } elseif ($filter == 'expense_month') {
+        $all_transactions = array_filter($all_transactions, fn($item) => $item['type'] == 'expense' && strpos($item['date'], $this_month) === 0);
+        $filter_title = "รายจ่ายเดือนนี้";
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>จัดการบัญชีและรายจ่าย - ChillRaft</title>
+    <title>บัญชี - รายรับ รายจ่าย</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
-    <style> body { font-family: 'Sarabun', sans-serif; } </style>
+    <style>body { font-family: 'Sarabun', sans-serif; }</style>
 </head>
-<body class="bg-slate-50 flex min-h-screen">
+<body class="bg-gray-50 flex min-h-screen">
 
     <!-- Mobile Sidebar Overlay -->
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
 
-    <!-- แถบ Sidebar -->
+    <!-- Sidebar -->
     <?php include 'sidebar.php'; ?>
 
     <main class="flex-grow flex flex-col min-w-0">
@@ -97,142 +178,221 @@ $recent_expenses = pg_query($conn, "SELECT id, title, amount, expense_date FROM 
                 <button onclick="toggleSidebar()" class="md:hidden mr-4 p-2 text-gray-600 hover:bg-gray-100 rounded-lg">
                     <i class="fa fa-bars text-xl"></i>
                 </button>
-                <div>
-                    <h2 class="text-lg md:text-xl font-bold text-gray-800">ระบบจัดการบัญชีและรายจ่าย</h2>
-                    <p class="text-xs text-gray-400">บันทึกและตรวจสอบการเงินย้อนหลัง</p>
-                </div>
+                <h2 class="text-xl font-black text-slate-800">บัญชี รายรับ - รายจ่าย</h2>
+            </div>
+            <div class="text-xs font-bold text-slate-500">
+                รายได้ค่าคิวสะสมทั้งหมด: <span class="text-emerald-600 font-black text-base">฿<?php echo number_format($income_all, 2); ?></span>
             </div>
         </header>
 
         <div class="p-4 md:p-8 space-y-8">
-            
-            <!-- การ์ดสรุปการเงิน -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-emerald-500">
-                    <p class="text-xs text-gray-400 font-bold uppercase">รายได้วันนี้</p>
-                    <h3 class="text-2xl font-black text-emerald-600 mt-1">฿<?php echo number_format($income_today, 2); ?></h3>
-                </div>
-                <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-rose-500">
-                    <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายวันนี้</p>
-                    <h3 class="text-2xl font-black text-rose-600 mt-1">฿<?php echo number_format($expense_today, 2); ?></h3>
-                </div>
-                <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-indigo-500">
-                    <p class="text-xs text-gray-400 font-bold uppercase">รายได้เดือนนี้</p>
-                    <h3 class="text-2xl font-black text-indigo-600 mt-1">฿<?php echo number_format($income_month, 2); ?></h3>
-                </div>
-                <div class="bg-white p-5 rounded-3xl shadow-sm border-b-4 border-slate-700">
-                    <p class="text-xs text-gray-400 font-bold uppercase">รายจ่ายเดือนนี้</p>
-                    <h3 class="text-2xl font-black text-slate-700 mt-1">฿<?php echo number_format($expense_month, 2); ?></h3>
-                </div>
+            <!-- การ์ดสรุป 5 กล่อง -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6">
+                <a href="?filter=income_today" class="bg-white p-6 rounded-[2rem] shadow-sm border-l-8 border-teal-500 hover:scale-[1.02] transition block">
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">รายได้ค่าแพวันนี้</p>
+                    <h3 class="text-2xl font-black text-teal-600">฿<?php echo number_format($raft_income_today, 2); ?></h3>
+                </a>
+
+                <a href="?filter=income_today" class="bg-white p-6 rounded-[2rem] shadow-sm border-l-8 border-emerald-500 hover:scale-[1.02] transition block">
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">ค่าคิว 10% วันนี้</p>
+                    <h3 class="text-2xl font-black text-emerald-600">฿<?php echo number_format($income_today, 2); ?></h3>
+                </a>
+
+                <a href="?filter=expense_today" class="bg-white p-6 rounded-[2rem] shadow-sm border-l-8 border-rose-500 hover:scale-[1.02] transition block">
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">รายจ่ายวันนี้</p>
+                    <h3 class="text-2xl font-black text-rose-600">฿<?php echo number_format($expense_today, 2); ?></h3>
+                </a>
+
+                <a href="?filter=income_month" class="bg-white p-6 rounded-[2rem] shadow-sm border-l-8 border-indigo-500 hover:scale-[1.02] transition block">
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">ค่าคิวเดือนนี้</p>
+                    <h3 class="text-2xl font-black text-indigo-600">฿<?php echo number_format($income_month, 2); ?></h3>
+                </a>
+
+                <a href="?filter=expense_month" class="bg-white p-6 rounded-[2rem] shadow-sm border-l-8 border-slate-800 hover:scale-[1.02] transition block">
+                    <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">รายจ่ายเดือนนี้</p>
+                    <h3 class="text-2xl font-black text-slate-800">฿<?php echo number_format($expense_month, 2); ?></h3>
+                </a>
             </div>
 
-            <!-- ฟอร์มบันทึกรายจ่าย -->
-            <div class="bg-white rounded-3xl shadow-sm p-6 md:p-8">
-                <h3 class="text-base md:text-lg font-bold text-gray-800 border-l-4 border-rose-500 pl-3 mb-6">บันทึกรายจ่ายใหม่</h3>
-                <form action="manage_finances.php" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <input type="hidden" name="action" value="add_expense">
-                    
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 mb-1">รายการรายจ่าย *</label>
-                        <input type="text" name="title" required placeholder="เช่น ค่าน้ำมัน, ค่าซ่อมแพ" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-rose-500">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- ฟอร์มบันทึกรายจ่าย -->
+                <div class="lg:col-span-1">
+                    <div class="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
+                        <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-3">
+                            <i class="fa fa-plus-circle text-rose-500 text-2xl"></i> บันทึกรายจ่าย
+                        </h3>
+                        <form action="manage_finances.php" method="POST" class="space-y-4">
+                            <input type="hidden" name="add_expense" value="1">
+                            <div>
+                                <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">ชื่อรายการค่าใช้จ่าย *</label>
+                                <input type="text" id="expense_title" name="title" list="expense_suggestions" required placeholder="เช่น ค่าน้ำมัน, ค่าล้างแพ..." 
+                                       class="w-full px-5 py-3 rounded-2xl bg-gray-50 border border-gray-200 focus:border-rose-400 outline-none text-sm font-bold">
+                                
+                                <datalist id="expense_suggestions">
+                                    <option value="ค่าเรือลาก" label="100 บาท"></option>
+                                    <option value="ค่าล้างทำความสะอาดแพ" label="100 บาท"></option>
+                                    <option value="ค่าน้ำมันเรือ" label="300 บาท"></option>
+                                    <option value="ค่าซ่อมบำรุงแพ" label="500 บาท"></option>
+                                    <option value="ค่าอุปกรณ์ / เสื้อชูชีพ" label="200 บาท"></option>
+                                    <option value="ค่าแรง / ค่าจ้างพนักงาน" label="300 บาท"></option>
+                                    <option value="ค่าน้ำ-ค่าไฟฟ้า" label="200 บาท"></option>
+                                    <option value="ค่าอาหาร / เครื่องดื่ม" label="150 บาท"></option>
+                                    <option value="ค่าดูแลรักษาท่าแพ" label="200 บาท"></option>
+                                    <option value="ค่าห้องน้ำ" label="50 บาท"></option>
+                                    <option value="ค่าเบ็ดเตล็ด" label="100 บาท"></option>
+                                </datalist>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">จำนวนเงิน (บาท) *</label>
+                                <input type="number" step="0.01" min="0" name="amount" id="expense_amount" required placeholder="0.00" 
+                                       class="w-full px-5 py-3 rounded-2xl bg-gray-50 border border-gray-200 focus:border-rose-400 outline-none text-sm font-black text-rose-600">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2">วันที่จ่ายเงิน *</label>
+                                <input type="date" name="expense_date" value="<?php echo date('Y-m-d'); ?>" required 
+                                       class="w-full px-5 py-3 rounded-2xl bg-gray-50 border border-gray-200 focus:border-rose-400 outline-none text-sm font-bold">
+                            </div>
+                            <button type="submit" class="w-full bg-rose-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-rose-200 hover:bg-rose-600 transition flex items-center justify-center gap-2 mt-4">
+                                <i class="fa fa-save"></i> บันทึกรายการรายจ่าย
+                            </button>
+                        </form>
                     </div>
+                </div>
 
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 mb-1">จำนวนเงิน (บาท) *</label>
-                        <input type="number" step="0.01" name="amount" required placeholder="0.00" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-rose-500">
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 mb-1">วันที่จ่าย</label>
-                        <input type="date" name="expense_date" value="<?php echo $today; ?>" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-rose-500">
-                    </div>
-
-                    <div class="flex items-end">
-                        <button type="submit" class="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold p-3 rounded-xl transition shadow-sm">
-                            <i class="fa fa-plus-circle mr-1"></i> บันทึกรายจ่าย
-                        </button>
-                    </div>
-                </form>
-            </div>
-
-            <!-- ตารางแสดงรายการรายรับและรายจ่าย -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                
-                <!-- ตารางรายรับ -->
-                <div class="bg-white rounded-3xl shadow-sm p-6">
-                    <h3 class="text-base font-bold text-gray-800 border-l-4 border-emerald-500 pl-3 mb-4">ประวัติรายรับล่าสุด (การชำระเงิน)</h3>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left font-sans text-sm">
-                            <thead class="bg-slate-50 text-slate-400 text-[11px] uppercase font-black">
-                                <tr>
-                                    <th class="p-3">วันที่</th>
-                                    <th class="p-3">ผู้ชำระ</th>
-                                    <th class="p-3 text-right">จำนวนเงิน</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-50">
-                                <?php if ($recent_incomes && pg_num_rows($recent_incomes) > 0): ?>
-                                    <?php while($inc = pg_fetch_assoc($recent_incomes)): ?>
-                                    <tr class="hover:bg-slate-50">
-                                        <td class="p-3 text-slate-500 text-xs"><?php echo date('d/m/Y H:i', strtotime($inc['paid_at'])); ?></td>
-                                        <td class="p-3 font-bold text-slate-700"><?php echo htmlspecialchars($inc['customer_name']); ?></td>
-                                        <td class="p-3 text-right font-bold text-emerald-600">+฿<?php echo number_format($inc['amount'], 2); ?></td>
-                                    </tr>
-                                    <?php endwhile; ?>
-                                <?php else: ?>
-                                    <tr><td colspan="3" class="p-6 text-center text-slate-400">ยังไม่มีข้อมูลรายรับ</td></tr>
+                <!-- ตารางสรุปรายการล่าสุด -->
+                <div class="lg:col-span-2">
+                    <div class="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="p-6 md:p-8 border-b border-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                            <h3 class="text-xl font-black text-slate-800 flex items-center gap-3">
+                                <i class="fa fa-history text-blue-500 text-2xl"></i> <?php echo $filter_title; ?>
+                            </h3>
+                            
+                            <form method="GET" action="manage_finances.php" class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                                <div class="flex items-center gap-1 bg-gray-50 p-1.5 rounded-2xl border border-gray-200">
+                                    <input type="date" name="start_date" value="<?php echo htmlspecialchars($start_date); ?>" 
+                                           class="bg-transparent text-xs font-bold text-gray-700 outline-none px-2 py-1">
+                                    <span class="text-gray-400 text-xs">ถึง</span>
+                                    <input type="date" name="end_date" value="<?php echo htmlspecialchars($end_date); ?>" 
+                                           class="bg-transparent text-xs font-bold text-gray-700 outline-none px-2 py-1">
+                                </div>
+                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-2xl font-bold text-xs transition shadow-sm">
+                                    <i class="fa fa-search mr-1"></i> กรอง
+                                </button>
+                                <?php if($filter != 'all' || !empty($start_date)): ?>
+                                    <a href="manage_finances.php" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2.5 rounded-2xl font-bold text-xs transition" title="ล้างตัวกรอง">
+                                        <i class="fa fa-redo"></i>
+                                    </a>
                                 <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                            </form>
+                        </div>
 
-                <!-- ตารางรายจ่าย -->
-                <div class="bg-white rounded-3xl shadow-sm p-6">
-                    <h3 class="text-base font-bold text-gray-800 border-l-4 border-rose-500 pl-3 mb-4">รายการรายจ่าย</h3>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left font-sans text-sm">
-                            <thead class="bg-slate-50 text-slate-400 text-[11px] uppercase font-black">
-                                <tr>
-                                    <th class="p-3">วันที่</th>
-                                    <th class="p-3">รายการ</th>
-                                    <th class="p-3 text-right">จำนวนเงิน</th>
-                                    <th class="p-3 text-center">จัดการ</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-50">
-                                <?php if ($recent_expenses && pg_num_rows($recent_expenses) > 0): ?>
-                                    <?php while($exp = pg_fetch_assoc($recent_expenses)): ?>
-                                    <tr class="hover:bg-slate-50">
-                                        <td class="p-3 text-slate-500 text-xs"><?php echo date('d/m/Y', strtotime($exp['expense_date'])); ?></td>
-                                        <td class="p-3 font-bold text-slate-700"><?php echo htmlspecialchars($exp['title']); ?></td>
-                                        <td class="p-3 text-right font-bold text-rose-600">-฿<?php echo number_format($exp['amount'], 2); ?></td>
-                                        <td class="p-3 text-center">
-                                            <a href="manage_finances.php?delete_expense=<?php echo $exp['id']; ?>" onclick="return confirm('ยืนยันลบรายการนี้?')" class="text-slate-400 hover:text-rose-600 p-1">
-                                                <i class="fa fa-trash"></i>
-                                            </a>
-                                        </td>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left font-sans">
+                                <thead class="bg-gray-50 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
+                                    <tr>
+                                        <th class="p-6">วันที่</th>
+                                        <th class="p-6">ประเภท</th>
+                                        <th class="p-6">รายละเอียด</th>
+                                        <th class="p-6 text-right">รายได้(ค่าคิว)</th>
+                                        <th class="p-6 text-center">จัดการ</th>
                                     </tr>
-                                    <?php endwhile; ?>
-                                <?php else: ?>
-                                    <tr><td colspan="4" class="p-6 text-center text-slate-400">ยังไม่มีข้อมูลรายจ่าย</td></tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody class="divide-y divide-gray-50">
+                                    <?php if (!empty($all_transactions)): ?>
+                                        <?php foreach($all_transactions as $row): ?>
+                                        <tr class="hover:bg-gray-50/50 transition duration-150">
+                                            <td class="p-6 text-xs font-bold text-gray-500 whitespace-nowrap">
+                                                <?php echo date('d/m/Y', strtotime($row['date'])); ?>
+                                            </td>
+                                            <td class="p-6">
+                                                <?php if($row['type'] == 'income'): ?>
+                                                    <span class="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">ค่าคิว 10% (<?php echo $row['status']; ?>)</span>
+                                                <?php else: ?>
+                                                    <span class="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">รายจ่าย</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="p-6">
+                                                <div class="text-sm font-bold text-slate-800"><?php echo htmlspecialchars($row['note']); ?></div>
+                                                <?php if($row['type'] == 'income'): ?>
+                                                    <div class="text-[10px] font-mono text-slate-400">
+                                                        Booking #<?php echo $row['code']; ?> | ยอดจองแพ: ฿<?php echo number_format($row['raft_total'], 2); ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td class="p-6 text-right font-black text-lg <?php echo $row['type'] == 'income' ? 'text-emerald-600' : 'text-rose-600'; ?>">
+                                                <?php echo ($row['type'] == 'income' ? '+' : '-') . number_format($row['amount'], 2); ?>
+                                            </td>
+                                            <td class="p-6 text-center">
+                                                <?php if($row['type'] == 'expense'): ?>
+                                                    <a href="?delete_expense=<?php echo $row['ref_id']; ?>" 
+                                                       onclick="return confirm('ยืนยันลบรายการใช้จ่ายนี้?')"
+                                                       class="w-8 h-8 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center hover:bg-rose-500 hover:text-white transition mx-auto">
+                                                        <i class="fa fa-trash-alt text-xs"></i>
+                                                    </a>
+                                                <?php else: ?>
+                                                    <a href="edit_booking.php?id=<?php echo $row['ref_id']; ?>" class="text-blue-500 hover:underline text-xs font-bold">ดูการจอง</a>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <tr>
+                                            <td colspan="5" class="p-16 text-center text-gray-400 font-bold">ไม่พบข้อมูลรายการเงินในช่วงนี้</td>
+                                        </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-
             </div>
-
         </div>
     </main>
 
     <script>
+        const expensePriceMap = {
+            'ค่าเรือลาก': 100,
+            'ค่าล้างทำความสะอาดแพ': 100,
+            'ค่าน้ำมันเรือ': 300,
+            'ค่าซ่อมบำรุงแพ': 500,
+            'ค่าอุปกรณ์ / เสื้อชูชีพ': 200,
+            'ค่าแรง / ค่าจ้างพนักงาน': 300,
+            'ค่าน้ำ-ค่าไฟฟ้า': 200,
+            'ค่าอาหาร / เครื่องดื่ม': 150,
+            'ค่าดูแลรักษาท่าแพ': 200,
+            'ค่าห้องน้ำ': 50,
+            'ค่าเบ็ดเตล็ด': 100
+        };
+
+        const expenseTitleEl = document.getElementById('expense_title');
+        const expenseAmountEl = document.getElementById('expense_amount');
+
+        if (expenseTitleEl && expenseAmountEl) {
+            function checkAndFillPrice() {
+                const val = expenseTitleEl.value.trim();
+                if (expensePriceMap[val] !== undefined) {
+                    expenseAmountEl.value = expensePriceMap[val].toFixed(2);
+                } else {
+                    for (const [key, price] of Object.entries(expensePriceMap)) {
+                        if (val === key || (val.length >= 4 && key.includes(val))) {
+                            expenseAmountEl.value = price.toFixed(2);
+                            break;
+                        }
+                    }
+                }
+            }
+            expenseTitleEl.addEventListener('input', checkAndFillPrice);
+            expenseTitleEl.addEventListener('change', checkAndFillPrice);
+        }
+
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
-            sidebar.classList.toggle('-translate-x-full');
-            overlay.classList.toggle('hidden');
+            if (sidebar && overlay) {
+                sidebar.classList.toggle('-translate-x-full');
+                sidebar.classList.toggle('sidebar-active');
+                overlay.classList.toggle('hidden');
+            }
         }
     </script>
 </body>
