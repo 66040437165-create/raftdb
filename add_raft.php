@@ -25,7 +25,7 @@ if ($conn) {
     @pg_query($conn, "ALTER TABLE rafts ADD COLUMN IF NOT EXISTS is_active INT DEFAULT 1;");
 }
 
-// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 อัตโนมัติ
+// 🟢 ฟังก์ชันย่อขนาดรูปภาพและแปลงเป็น Base64 อัตโนมัติ (เก็บรูปลงฐานข้อมูลโดยตรง)
 function convert_image_to_base64($tmp_file, $max_width = 1000) {
     if (!file_exists($tmp_file)) return '';
 
@@ -100,20 +100,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $images = ['', '', '', '', ''];
         $img_index = 0;
 
-        // โฟลเดอร์สำหรับสำรองไฟล์
         $target_dir = __DIR__ . '/uploads/';
         if (!is_dir($target_dir)) {
             @mkdir($target_dir, 0777, true);
         }
 
-        // 1. ตรวจสอบกรณีใส่เป็น URL รูปภาพ
+        // 1. ตรวจสอบกรณีใส่เป็นชื่อไฟล์ (GitHub) หรือ URL รูปภาพ
         if (!empty($image_url_opt)) {
             $featured_image = $image_url_opt;
             $images[0] = $image_url_opt;
             $img_index = 1;
         }
 
-        // 2. จัดการรูปภาพที่อัปโหลดจากเครื่อง (แปลงเป็น Base64 พร้อมเซฟลงดิสก์สำรอง)
+        // 2. จัดการรูปภาพที่อัปโหลดจากเครื่อง (แปลงเป็น Base64 ฝังลงฐานข้อมูล)
         if (!empty($_FILES['raft_images']['name'][0])) {
             foreach ($_FILES['raft_images']['name'] as $key => $val) {
                 if ($img_index >= 5) break;
@@ -128,7 +127,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         }
                         $images[$img_index] = $image_base64;
 
-                        // เซฟไฟล์จริงลง uploads/ สำรองไว้
+                        // เซฟไฟล์จริงลง uploads/ สำรองไว้เฉยๆ (แต่หลักๆ เราใช้ Base64 แล้ว)
                         $ext = strtolower(pathinfo($_FILES['raft_images']['name'][$key], PATHINFO_EXTENSION)) ?: 'jpg';
                         $backup_filename = "raft_" . time() . "_{$img_index}." . $ext;
                         @copy($tmp_file, $target_dir . $backup_filename);
@@ -278,11 +277,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     <!-- ส่วนอัปโหลดรูปภาพ -->
                     <div class="border-t border-slate-100 pt-4">
-                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">1. ลิงก์ URL รูปภาพหลัก (ถ้ามี)</label>
-                        <input type="url" name="image_url" placeholder="https://example.com/image.jpg หรือลิงก์รูปภาพ"
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">1. ระบุชื่อไฟล์ (จาก GitHub) หรือ URL รูปภาพ</label>
+                        <!-- 🟢 แก้ไขตรงนี้เป็น type="text" -->
+                        <input type="text" name="image_url" placeholder="เช่น raft1.jpg หรือ https://..."
                                class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 font-bold placeholder:text-slate-300 transition text-sm mb-4">
 
-                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">2. เลือกอัปโหลดไฟล์จากเครื่อง (สูงสุด 5 รูป - รูปจะไม่หายแม้เซิร์ฟเวอร์ Restart)</label>
+                        <label class="block text-xs font-black uppercase tracking-widest mb-2 text-slate-400">2. หรือ เลือกอัปโหลดไฟล์จากเครื่อง <span class="text-blue-500">(รูปจะถูกฝังในฐานข้อมูล ไม่มีวันหาย 100%)</span></label>
                         <div class="flex items-center justify-center w-full">
                             <label class="flex flex-col items-center justify-center w-full h-36 border-2 border-slate-200 border-dashed rounded-[2rem] cursor-pointer bg-slate-50 hover:bg-blue-50 transition p-6 text-center">
                                 <div class="flex flex-col items-center justify-center">
@@ -290,7 +290,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                         <i class="fa fa-cloud-upload-alt text-blue-500 text-lg"></i>
                                     </div>
                                     <p class="text-xs text-slate-500 font-bold"><span class="text-blue-600">คลิกเพื่ออัปโหลด</span> หรือลากไฟล์มาวาง</p>
-                                    <p class="text-[10px] text-slate-400 mt-1 uppercase tracking-tighter">PNG, JPG, WEBP</p>
+                                    <p class="text-[10px] text-slate-400 mt-1 uppercase tracking-tighter">PNG, JPG, WEBP (สูงสุด 5 รูป)</p>
                                 </div>
                                 <input type="file" name="raft_images[]" accept="image/*" multiple class="hidden" id="img-input" onchange="previewImages(event)" />
                             </label>
