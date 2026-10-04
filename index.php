@@ -137,7 +137,7 @@ if (empty($hero_bg_file) || !file_exists(__DIR__ . '/' . $hero_bg_file)) {
     }
 }
 
-// 5. ดึงข้อมูลแพว่างจากตาราง rafts
+// 5. ดึงข้อมูลแพว่างจากตาราง rafts (เฉพาะสถานะ available เท่านั้น)
 $rafts = [];
 if ($conn) {
     $r_cols = [];
@@ -159,8 +159,9 @@ if ($conn) {
     $params = [];
     $p_idx = 1;
 
+    // 🟢 ดึงเฉพาะแพที่มีสถานะเป็น available หรือว่างเปล่าเท่านั้น (กรองสถานะอื่นออก)
     $where_clauses = [
-        "(r.status IS NULL OR TRIM(LOWER(r.status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0'))"
+        "(r.status IS NULL OR TRIM(LOWER(r.status)) = 'available' OR TRIM(LOWER(r.status)) = '')"
     ];
 
     if (in_array('is_active', $r_cols)) {
@@ -215,7 +216,7 @@ if ($conn) {
     $result = !empty($params) ? @pg_query_params($conn, $sql, $params) : @pg_query($conn, $sql);
 
     if (!$result || pg_num_rows($result) === 0) {
-        $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) NOT IN ('maintenance', 'closed', 'repair', 'disabled', 'inactive', 'ปิดปรับปรุง', 'ปิดบริการ', '0')) ORDER BY id ASC";
+        $fallback_sql = "SELECT * FROM rafts WHERE (status IS NULL OR TRIM(LOWER(status)) = 'available' OR TRIM(LOWER(status)) = '') ORDER BY id ASC";
         $result = @pg_query($conn, $fallback_sql);
     }
 
@@ -263,7 +264,6 @@ if ($conn) {
                 <span class="hidden xs:inline text-sm md:text-base font-bold text-gray-700">จองแพออนไลน์</span>
             </a>
             <div class="flex items-center space-x-2 md:space-x-4">
-                <!-- 🟢 เปลี่ยนลิงก์ปฏิทินให้ชี้ไปที่ customer_calendar.php -->
                 <a href="customer_calendar.php" class="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-3 py-2 rounded-xl text-xs transition font-bold flex items-center gap-1">
                     <i class="fa fa-calendar-alt text-blue-500"></i> ปฏิทินการจอง
                 </a>
