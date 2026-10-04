@@ -10,7 +10,7 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 
 $booking_id = intval($_GET['id']);
 
-// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (ใช้ pg_query_params เพื่อความปลอดภัย)
+// 2. ดึงข้อมูลการจอง + ข้อมูลแพ
 $sql = "SELECT b.*, 
                r.name AS raft_name, 
                r.price_per_day, 
@@ -22,12 +22,12 @@ $sql = "SELECT b.*,
         FROM bookings b
         JOIN rafts r ON b.raft_id = r.id
         LEFT JOIN customers c ON b.customer_id = c.id
-        WHERE b.id = $1
+        WHERE b.id = $booking_id
         LIMIT 1";
 
-$result = @pg_query_params($conn, $sql, array($booking_id));
+$result = $conn->query($sql);
 
-if (!$result || pg_num_rows($result) == 0) {
+if (!$result || $result->num_rows == 0) {
     echo "<div style='text-align:center; padding:50px; font-family:sans-serif;'>
             <h2>ไม่พบข้อมูลการจอง</h2>
             <a href='index.php'>กลับหน้าหลัก</a>
@@ -35,26 +35,15 @@ if (!$result || pg_num_rows($result) == 0) {
     exit();
 }
 
-$booking = pg_fetch_assoc($result);
+$booking = $result->fetch_assoc();
 
-// ดึงข้อมูลสลิปจากตาราง payments 
+// ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตารางนี้)
 $payment = null;
-// เช็คว่ามีตาราง payments อยู่หรือไม่ใน PostgreSQL
-$check_table_sql = "SELECT EXISTS (
-    SELECT FROM information_schema.tables 
-    WHERE table_schema = 'public' 
-    AND table_name = 'payments'
-)";
-$chk_payment_table = @pg_query($conn, $check_table_sql);
-
-if ($chk_payment_table) {
-    $row = pg_fetch_row($chk_payment_table);
-    if ($row[0] === 't') { // 't' คือ true
-        $pay_sql = "SELECT * FROM payments WHERE booking_id = $1 ORDER BY id DESC LIMIT 1";
-        $pay_res = @pg_query_params($conn, $pay_sql, array($booking_id));
-        if ($pay_res && pg_num_rows($pay_res) > 0) {
-            $payment = pg_fetch_assoc($pay_res);
-        }
+$chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
+if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
+    $pay_res = $conn->query("SELECT * FROM payments WHERE booking_id = $booking_id ORDER BY id DESC LIMIT 1");
+    if ($pay_res && $pay_res->num_rows > 0) {
+        $payment = $pay_res->fetch_assoc();
     }
 }
 
@@ -184,39 +173,17 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
-                        
-                        <!-- 🟢 โหลดรูปแพ (ใช้ Base64 ทะลวงบล็อกเช่นกัน) -->
                         <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
-                            <?php 
-                            $displayImg = '';
-                            if (!empty($booking['featured_image'])) {
-                                $raw_img = trim($booking['featured_image']);
-                                $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $raw_img), '/');
-                                
-                                $raft_file_path = __DIR__ . '/uploads/' . $clean_name;
-                                $displayImg = 'uploads/' . $clean_name; // ค่าเริ่มต้น
-                                
-                                // ถ้าหาไฟล์เจอ แปลงเป็น Base64
-                                if (file_exists($raft_file_path)) {
-                                    $raft_data = @file_get_contents($raft_file_path);
-                                    if ($raft_data !== false) {
-                                        $ext = strtolower(pathinfo($raft_file_path, PATHINFO_EXTENSION));
-                                        $mime = ($ext == 'png') ? 'image/png' : 'image/jpeg';
-                                        $displayImg = 'data:' . $mime . ';base64,' . base64_encode($raft_data);
-                                    }
-                                }
-                            }
+                            <?php if(!empty($booking['featured_image'])): 
+                                // ลบโฟลเดอร์เก่าออกแล้วใส่ uploads/ เผื่อไว้เสมอ
+                                $raft_clean = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $booking['featured_image']), '/');
+                                $raft_url = 'uploads/' . $raft_clean;
                             ?>
-                            
-                            <?php if(!empty($displayImg)): ?>
-                                <img src="<?php echo htmlspecialchars($displayImg); ?>" 
-                                     alt="<?php echo htmlspecialchars($booking['raft_name']); ?>" 
-                                     class="w-full h-full object-cover">
+                                <img src="<?php echo htmlspecialchars($raft_url); ?>" class="w-full h-full object-cover">
                             <?php else: ?>
                                 <div class="w-full h-full flex items-center justify-center text-slate-400 text-2xl"><i class="fa fa-ship"></i></div>
                             <?php endif; ?>
                         </div>
-                        
                         <div>
                             <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($booking['raft_name']); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
@@ -310,29 +277,14 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     </span>
                                 </div>
                                 
-                                <!-- 🟢 โหลดรูปลสิปของจริง (ใช้เทคนิค Base64 ทะลวงบล็อกโฮสต์) -->
+                                <!-- โหลดรูปสลิปแบบธรรมดาที่สุด -->
                                 <div class="text-center">
                                     <?php 
+                                    // เคลียร์คำว่า uploads/ หรือ slips/ ทิ้งให้หมด ก่อนเติมใหม่ทีเดียว
                                     $clean_slip = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|slips\/|\/)+/i', '', $slip_img), '/');
-                                    $file_path = __DIR__ . '/uploads/' . $clean_slip;
-                                    $img_src = 'uploads/' . $clean_slip; // ค่าเริ่มต้น
-                                    
-                                    // ถ้า PHP มองเห็นไฟล์บนเซิร์ฟเวอร์ ให้ดึงข้อมูลภาพมาฝังใน HTML เลย
-                                    if (file_exists($file_path)) {
-                                        $img_data = @file_get_contents($file_path);
-                                        if ($img_data !== false) {
-                                            $ext = strtolower(pathinfo($file_path, PATHINFO_EXTENSION));
-                                            $mime = ($ext == 'png') ? 'image/png' : 'image/jpeg';
-                                            $img_src = 'data:' . $mime . ';base64,' . base64_encode($img_data);
-                                        }
-                                    }
                                     ?>
-                                    
-                                    <img src="<?php echo htmlspecialchars($img_src); ?>" 
-                                         class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white"
-                                         alt="หลักฐานการชำระเงิน">
+                                    <img src="uploads/<?php echo htmlspecialchars($clean_slip); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white">
                                 </div>
-                                
                             </div>
                         <?php else: ?>
                             <form action="save_payment.php" method="POST" enctype="multipart/form-data" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
