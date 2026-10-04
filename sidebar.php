@@ -62,7 +62,8 @@ function navClass($page_name, $current_page) {
                 <span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-lg ml-auto"><?php echo $pending_count; ?></span>
             <?php endif; ?>
         </a>
-        <a href="booking_calendar.php" class="flex items-center p-3 rounded-xl <?php echo navClass('booking_calendar.php', $current_page); ?>">
+        <!-- ปรับลิงก์ปฏิทินหลังบ้านให้ชี้ไปที่ admin_calendar.php -->
+        <a href="admin_calendar.php" class="flex items-center p-3 rounded-xl <?php echo navClass('admin_calendar.php', $current_page); ?>">
             <i class="fa fa-calendar-alt w-6 text-center"></i> <span class="ml-2">ปฏิทินการจอง</span>
         </a>
         <a href="manage_customers.php" class="flex items-center p-3 rounded-xl <?php echo navClass('manage_customers.php', $current_page); ?>">
