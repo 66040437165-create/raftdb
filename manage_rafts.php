@@ -23,7 +23,7 @@ if ($conn) {
     }
 }
 
-// 🟢 ฟังก์ชันจัดการ URL รูปภาพ (รองรับทั้ง Row ข้อมูล, Base64, URL และ Path ปกติ)
+// 🟢 ฟังก์ชันจัดการ URL รูปภาพ
 if (!function_exists('get_raft_image_url')) {
     function get_raft_image_url($input) {
         $img = '';
@@ -44,18 +44,16 @@ if (!function_exists('get_raft_image_url')) {
 
         if (empty($img)) return '';
 
-        // กรณีเป็น Full URL หรือ Base64
         if (preg_match('/^(https?:\/\/|data:image\/)/i', $img)) {
             return $img;
         }
 
-        // ตัด path uploads/ ที่อาจติดมาข้างหน้าออก
         $clean_img = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $img), '/');
         return 'uploads/' . $clean_img;
     }
 }
 
-// 2. ระบบสลับสถานะ (Quick Toggle Status)
+// 2. ระบบสลับสถานะ
 if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
     $id = intval($_GET['change_status']);
     $val = trim($_GET['new_val']);
@@ -70,8 +68,6 @@ if (isset($_GET['change_status']) && isset($_GET['new_val'])) {
 if (isset($_GET['delete_id'])) {
     $delete_id = intval($_GET['delete_id']);
     if ($conn && $delete_id > 0) {
-
-        // ตรวจสอบคอลัมน์ของ rafts
         $r_cols = [];
         $res_rc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'rafts'");
         if ($res_rc) {
@@ -80,7 +76,6 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // ตรวจสอบคอลัมน์ของ bookings
         $b_cols = [];
         $res_bc = @pg_query($conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'bookings'");
         if ($res_bc) {
@@ -89,7 +84,6 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // ตรวจสอบตาราง payments
         $chk_pay = @pg_query($conn, "SELECT to_regclass('public.payments')");
         $has_pay = ($chk_pay && ($r_tbl = pg_fetch_row($chk_pay)) && !empty($r_tbl[0]));
         $pay_cols = [];
@@ -102,14 +96,11 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // ตรวจสอบตาราง raft_images
         $chk_r_imgs = @pg_query($conn, "SELECT to_regclass('public.raft_images')");
         $has_r_imgs = ($chk_r_imgs && ($r_tbl = pg_fetch_row($chk_r_imgs)) && !empty($r_tbl[0]));
 
-        // เริ่ม Transaction
         @pg_query($conn, "BEGIN");
 
-        // 3.1 ลบข้อมูล payments
         if ($has_pay && in_array('booking_id', $pay_cols)) {
             if (in_array('slip_image', $pay_cols)) {
                 $res_pay_slips = @pg_query_params($conn, "SELECT slip_image FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE raft_id = $1)", array($delete_id));
@@ -131,7 +122,6 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.2 ลบรูปสลิปจากตาราง bookings
         if (in_array('slip_image', $b_cols)) {
             $res_slips = @pg_query_params($conn, "SELECT slip_image FROM bookings WHERE raft_id = $1", array($delete_id));
             if ($res_slips) {
@@ -144,7 +134,6 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.3 ลบรูปภาพจากตาราง rafts (ถ้าไม่มีแพลำอื่นใช้งานอยู่)
         $img_cols_to_select = [];
         if (in_array('featured_image', $r_cols)) $img_cols_to_select[] = 'featured_image';
         for ($i = 1; $i <= 5; $i++) {
@@ -154,7 +143,6 @@ if (isset($_GET['delete_id'])) {
         if (!empty($img_cols_to_select)) {
             $res_raft_imgs = @pg_query_params($conn, "SELECT " . implode(", ", $img_cols_to_select) . " FROM rafts WHERE id = $1", array($delete_id));
             if ($res_raft_imgs && $r_img = pg_fetch_assoc($res_raft_imgs)) {
-                
                 $all_available_img_cols = array_intersect(
                     ['featured_image', 'image_1', 'image_2', 'image_3', 'image_4', 'image_5'],
                     $r_cols
@@ -168,7 +156,6 @@ if (isset($_GET['delete_id'])) {
                     }
 
                     $clean_file_name = basename($img_val);
-
                     $where_conds = [];
                     foreach ($all_available_img_cols as $c_name) {
                         $where_conds[] = "{$c_name} = $2 OR {$c_name} = $3 OR {$c_name} = 'uploads/' || $3";
@@ -193,7 +180,6 @@ if (isset($_GET['delete_id'])) {
             }
         }
 
-        // 3.4 ลบรูปจากตารางย่อย raft_images (ถ้ามี)
         if ($has_r_imgs) {
             $res_imgs = @pg_query_params($conn, "SELECT image_path FROM raft_images WHERE raft_id = $1", array($delete_id));
             if ($res_imgs) {
@@ -218,7 +204,6 @@ if (isset($_GET['delete_id'])) {
             @pg_query_params($conn, "DELETE FROM raft_images WHERE raft_id = $1", array($delete_id));
         }
 
-        // 3.5 ลบรายการจองในตาราง bookings
         $del_b = @pg_query_params($conn, "DELETE FROM bookings WHERE raft_id = $1", array($delete_id));
         if ($del_b === false) {
             $err = pg_last_error($conn);
@@ -227,7 +212,6 @@ if (isset($_GET['delete_id'])) {
             exit();
         }
 
-        // 3.6 ลบแพออกจากตาราง rafts
         $del_raft = @pg_query_params($conn, "DELETE FROM rafts WHERE id = $1", array($delete_id));
         if ($del_raft === false) {
             $err = pg_last_error($conn);
@@ -271,21 +255,42 @@ $total_pages = ceil($total_rows / $limit);
 // 6. ดึงข้อมูลแพ
 $rafts = [];
 if ($conn) {
-    $base_sql = "SELECT r.*, COALESCE(t.name, t.type_name, 'ประเภท #' || r.raft_type_id) as type_name 
-                 FROM rafts r 
-                 LEFT JOIN raft_types t ON r.raft_type_id = t.id";
+    // 🟢 เช็คก่อนว่ามีตาราง raft_types หรือไม่
+    $chk_types = @pg_query($conn, "SELECT to_regclass('public.raft_types')");
+    $has_types = ($chk_types && ($r_tbl = pg_fetch_row($chk_types)) && !empty($r_tbl[0]));
+
+    if ($has_types) {
+        $base_sql = "SELECT r.*, COALESCE(t.name, t.type_name, 'ประเภท #' || r.raft_type_id) as type_name 
+                     FROM rafts r 
+                     LEFT JOIN raft_types t ON r.raft_type_id = t.id";
+    } else {
+        $base_sql = "SELECT r.*, 'แพมาตรฐาน' as type_name FROM rafts r";
+    }
 
     if (!empty($search_params)) {
-        $sql = "$base_sql WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ORDER BY r.id DESC LIMIT $limit OFFSET $offset";
-        $result = @pg_query_params($conn, $sql, $search_params);
+        // ใช้ $2 และ $3 สำหรับ LIMIT และ OFFSET
+        $sql = "$base_sql WHERE (r.name ILIKE $1 OR COALESCE(r.raft_code, '') ILIKE $1) ORDER BY r.id DESC LIMIT $2 OFFSET $3";
+        $params_with_limit = array_merge($search_params, [$limit, $offset]);
+        $result = @pg_query_params($conn, $sql, $params_with_limit);
     } else {
-        $sql = "$base_sql ORDER BY r.id DESC LIMIT $limit OFFSET $offset";
-        $result = @pg_query($conn, $sql);
+        // ถ้าไม่มีการค้นหา ใช้แค่ $1 และ $2
+        $sql = "$base_sql ORDER BY r.id DESC LIMIT $1 OFFSET $2";
+        $result = @pg_query_params($conn, $sql, [$limit, $offset]);
     }
 
     if ($result) {
         while ($row = pg_fetch_assoc($result)) {
             $rafts[] = $row;
+        }
+    } else {
+        // Fallback: ถ้า Query หลักพัง ให้ลองดึงแบบธรรมดา
+        $fallback_sql = "SELECT * FROM rafts ORDER BY id DESC LIMIT $1 OFFSET $2";
+        $result_fb = @pg_query_params($conn, $fallback_sql, [$limit, $offset]);
+        if ($result_fb) {
+            while ($row = pg_fetch_assoc($result_fb)) {
+                $row['type_name'] = 'แพมาตรฐาน';
+                $rafts[] = $row;
+            }
         }
     }
 }
