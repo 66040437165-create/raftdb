@@ -86,9 +86,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['payment_slip'])) {
                 send_line_message($line_msg);
             }
             
+            // 🟢 เปลี่ยนเส้นทางกลับไปยังหน้า booking_success.php
             echo "<script>
                     alert('บันทึกหลักฐานและรายละเอียดการชำระเงินเรียบร้อยแล้ว');
-                    window.location.href = 'receipt.php?id=$booking_id';
+                    window.location.href = 'booking_success.php?id=$booking_id';
                   </script>";
             exit();
         } else {
