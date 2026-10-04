@@ -9,34 +9,25 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 }
 
 $booking_id = intval($_GET['id']);
-$booking = null;
 
-// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (PostgreSQL Syntax)
-if ($conn) {
-    $sql = "
-        SELECT b.*, 
-               COALESCE(r.name, '') AS raft_name, 
+// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (ใช้ pg_query_params เพื่อความปลอดภัย)
+$sql = "SELECT b.*, 
+               r.name AS raft_name, 
                r.price_per_day, 
                r.price_per_hour, 
                r.featured_image,
-               r.capacity,
                c.full_name AS customer_name,
                c.phone AS customer_phone,
                c.email AS customer_email
         FROM bookings b
-        LEFT JOIN rafts r ON b.raft_id = r.id
+        JOIN rafts r ON b.raft_id = r.id
         LEFT JOIN customers c ON b.customer_id = c.id
         WHERE b.id = $1
-        LIMIT 1
-    ";
-    
-    $res = @pg_query_params($conn, $sql, array($booking_id));
-    if ($res && pg_num_rows($res) > 0) {
-        $booking = pg_fetch_assoc($res);
-    }
-}
+        LIMIT 1";
 
-if (!$booking) {
+$result = @pg_query_params($conn, $sql, array($booking_id));
+
+if (!$result || pg_num_rows($result) == 0) {
     echo "<div style='text-align:center; padding:50px; font-family:sans-serif;'>
             <h2>ไม่พบข้อมูลการจอง</h2>
             <a href='index.php'>กลับหน้าหลัก</a>
@@ -44,14 +35,23 @@ if (!$booking) {
     exit();
 }
 
-// 3. ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตาราง payments)
+$booking = pg_fetch_assoc($result);
+
+// ดึงข้อมูลสลิปจากตาราง payments 
 $payment = null;
-if ($conn) {
-    $chk_tbl = @pg_query($conn, "SELECT to_regclass('public.payments')");
-    $has_tbl = ($chk_tbl && ($r_tbl = pg_fetch_row($chk_tbl)) && !empty($r_tbl[0]));
-    
-    if ($has_tbl) {
-        $pay_res = @pg_query_params($conn, "SELECT * FROM payments WHERE booking_id = $1 ORDER BY id DESC LIMIT 1", array($booking_id));
+// เช็คว่ามีตาราง payments อยู่หรือไม่ใน PostgreSQL
+$check_table_sql = "SELECT EXISTS (
+    SELECT FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_name = 'payments'
+)";
+$chk_payment_table = @pg_query($conn, $check_table_sql);
+
+if ($chk_payment_table) {
+    $row = pg_fetch_row($chk_payment_table);
+    if ($row[0] === 't') { // 't' คือ true
+        $pay_sql = "SELECT * FROM payments WHERE booking_id = $1 ORDER BY id DESC LIMIT 1";
+        $pay_res = @pg_query_params($conn, $pay_sql, array($booking_id));
         if ($pay_res && pg_num_rows($pay_res) > 0) {
             $payment = pg_fetch_assoc($pay_res);
         }
@@ -59,51 +59,23 @@ if ($conn) {
 }
 
 // กำหนดตัวแปรข้อมูลสำหรับแสดงผล
-$b_id = $booking['id'] ?? $booking_id;
-$booking_code = !empty($booking['booking_code']) ? $booking['booking_code'] : ('BK' . str_pad($b_id, 6, '0', STR_PAD_LEFT));
+$booking_code = !empty($booking['booking_code']) ? $booking['booking_code'] : ('BK' . str_pad($booking['id'], 6, '0', STR_PAD_LEFT));
 $guest_name   = !empty($booking['customer_name']) ? $booking['customer_name'] : ($booking['guest_name'] ?? 'ลูกค้า');
 $guest_tel    = !empty($booking['customer_phone']) ? $booking['customer_phone'] : ($booking['guest_tel'] ?? '-');
 $guest_email  = !empty($booking['customer_email']) ? $booking['customer_email'] : ($booking['guest_email'] ?? '-');
 
-$check_in_date = $booking['check_in_date'] ?? (!empty($booking['check_in']) ? date('Y-m-d', strtotime($booking['check_in'])) : date('Y-m-d'));
-$check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($booking['check_in_time'])) : (!empty($booking['check_in']) ? date('H:i', strtotime($booking['check_in'])) : '09:00');
+$check_in_date = $booking['check_in_date'] ?? date('Y-m-d');
+$check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($booking['check_in_time'])) : '09:00';
+$check_out_date = $booking['check_out_date'] ?? $check_in_date;
+$check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : '17:30';
 
-$check_out_date = $booking['check_out_date'] ?? (!empty($booking['check_out']) ? date('Y-m-d', strtotime($booking['check_out'])) : $check_in_date);
-$check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : (!empty($booking['check_out']) ? date('H:i', strtotime($booking['check_out'])) : '17:30');
+$total_price = floatval($booking['total_price'] ?? $booking['raft_price'] ?? 0);
+$slip_img = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
 
-// ดึงยอดชำระเงิน
-$total_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
-$raw_slip = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
+// สถานะการจอง (รองรับทั้ง status_id = 2 คืออนุมัติแล้ว หรือ status = 'confirmed')
+$is_confirmed = (isset($booking['status_id']) && $booking['status_id'] == 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
 
-// 🟢 ฟังก์ชันจัดการแสดงผลรูปสลิปให้ถูกต้องเสมอ
-function get_slip_image_url($img_val) {
-    $img_val = trim($img_val ?? '');
-    if (empty($img_val)) return '';
-
-    if (preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
-        return $img_val;
-    }
-
-    $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/slips\/|uploads\/|\/uploads\/slips\/|\/uploads\/)+/i', '', $img_val), '/');
-    
-    $dir = __DIR__ . '/uploads/slips/';
-    if (is_dir($dir) && file_exists($dir . $clean_name)) {
-        return 'uploads/slips/' . $clean_name;
-    }
-
-    $dir_alt = __DIR__ . '/uploads/';
-    if (is_dir($dir_alt) && file_exists($dir_alt . $clean_name)) {
-        return 'uploads/' . $clean_name;
-    }
-
-    return 'uploads/slips/' . $clean_name;
-}
-
-$slip_img_url = get_slip_image_url($raw_slip);
-
-$is_confirmed = (isset($booking['status_id']) && (int)$booking['status_id'] === 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
-$has_line = !empty($_SESSION['line_user_id']) || !empty($_SESSION['user_line_id']) || !empty($booking['line_user_id']);
-
+// ฟังก์ชันแปลงวันที่เป็นภาษาไทย
 function thai_date_short($date_str) {
     if (!$date_str) return '-';
     $timestamp = strtotime($date_str);
@@ -112,19 +84,35 @@ function thai_date_short($date_str) {
         7 => "ก.ค.", 8 => "ส.ค.", 9 => "ก.ย.", 10 => "ต.ค.", 11 => "พ.ย.", 12 => "ธ.ค."
     );
     $d = date('j', $timestamp);
-    $m = $thai_months[(int)date('n', $timestamp)];
+    $m = $thai_months[date('n', $timestamp)];
     $y = date('Y', $timestamp) + 543;
     return "$d $m $y";
 }
 
-$raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('แพ #' . ($booking['raft_id'] ?? ''));
+// -------------------------------------------------------------------------
+// จัดเตรียมข้อความรายละเอียดเพื่อส่งเข้า LINE ร้าน
+$line_text = "สวัสดีครับ ขอแจ้งรายละเอียดการจองแพครับ 🛶\n";
+$line_text .= "━━━━━━━━━━━━━━━━\n";
+$line_text .= "📋 Booking ID: {$booking_code}\n";
+$line_text .= "👤 ชื่อผู้จอง: {$guest_name}\n";
+$line_text .= "📞 เบอร์โทร: {$guest_tel}\n";
+$line_text .= "⛵ แพที่จอง: {$booking['raft_name']}\n";
+$line_text .= "📅 วันที่เข้าใช้บริการ: " . thai_date_short($check_in_date) . " ({$check_in_time} น.)\n";
+$line_text .= "💰 ยอดรวมทั้งสิ้น: ฿" . number_format($total_price, 2) . "\n";
+$line_text .= "━━━━━━━━━━━━━━━━\n";
+$line_text .= "✨ รบกวนแอดมินตรวจสอบการชำระเงินให้ด้วยนะครับ";
+
+$line_oa_id = "@YOUR_LINE_OA_ID"; // เปลี่ยนเป็น Line ID ร้าน
+$encoded_line_text = urlencode($line_text);
+$line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_text}";
+// -------------------------------------------------------------------------
 ?>
 <!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>จองสำเร็จ - ล่องแพหนองกวาก</title>
+    <title>จองสำเร็จ - ChillRaft</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
@@ -133,33 +121,22 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
 <body class="bg-slate-50 min-h-screen py-10 px-4">
 
     <div class="max-w-3xl mx-auto">
-        <div class="text-center mb-8">
+        <div class="text-center mb-10">
             <div class="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm animate-bounce">
                 <i class="fa fa-check text-4xl text-emerald-500"></i>
             </div>
             <h1 class="text-3xl font-black text-gray-800">ส่งคำขอจองสำเร็จ!</h1>
-            <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพหนองกวากกับเรา</p>
+            <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพกับเรา</p>
         </div>
 
-        <?php if ($has_line): ?>
-            <div class="mb-6 p-4 bg-emerald-50 border-2 border-emerald-300 rounded-3xl flex items-center gap-4 shadow-sm">
-                <div class="w-12 h-12 bg-[#06C755] text-white rounded-2xl flex items-center justify-center shrink-0 text-2xl shadow-md shadow-emerald-200">
-                    <i class="fab fa-line"></i>
-                </div>
-                <div>
-                    <h4 class="font-black text-emerald-900 text-sm md:text-base">ส่งใบยืนยันการจองเข้า LINE ของคุณเรียบร้อยแล้ว!</h4>
-                    <p class="text-xs text-emerald-700 mt-0.5">ระบบได้ส่งรหัสการจอง ยอดชำระ และเลขบัญชีเข้าแชท LINE ของคุณโดยอัตโนมัติ สามารถเปิดดูได้ทันที</p>
-                </div>
-            </div>
-        <?php endif; ?>
-
         <div class="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-gray-100">
+            <!-- Header ส่วนแสดงรหัสจอง -->
             <div class="bg-slate-900 p-8 text-center text-white relative overflow-hidden">
                 <div class="relative z-10">
                     <p class="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">รหัสการจอง (Booking Code)</p>
-                    <p class="text-4xl font-black text-blue-400 tracking-wider"><?php echo htmlspecialchars($booking_code); ?></p>
+                    <p class="text-4xl font-black text-blue-400 tracking-wider"><?php echo $booking_code; ?></p>
                     
-                    <?php if (!empty($raw_slip)): ?>
+                    <?php if (!empty($slip_img)): ?>
                         <?php if ($is_confirmed): ?>
                             <div class="inline-block bg-emerald-500/20 text-emerald-300 text-[11px] px-4 py-1.5 rounded-full font-bold uppercase mt-3 border border-emerald-500/30">
                                 <i class="fa fa-check-circle mr-1"></i> ยืนยันการจองเรียบร้อยแล้ว
@@ -180,6 +157,7 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
             </div>
 
             <div class="p-8 md:p-12">
+                <!-- ข้อมูลลูกค้า -->
                 <div class="mb-8 p-6 bg-slate-50 rounded-3xl border border-slate-100">
                     <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                         <i class="fa fa-user-circle text-blue-500 mr-2"></i> ข้อมูลผู้จอง
@@ -200,15 +178,23 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                     </div>
                 </div>
 
+                <!-- รายละเอียดการจอง -->
                 <div class="mb-10">
                     <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
+                        <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
+                            <?php if(!empty($booking['featured_image'])): ?>
+                                <img src="uploads/<?php echo htmlspecialchars($booking['featured_image']); ?>" class="w-full h-full object-cover">
+                            <?php else: ?>
+                                <div class="w-full h-full flex items-center justify-center text-slate-400 text-2xl"><i class="fa fa-ship"></i></div>
+                            <?php endif; ?>
+                        </div>
                         <div>
-                            <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($raft_display_name); ?></h4>
+                            <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($booking['raft_name']); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
-                            <p class="text-blue-600 font-bold text-sm mt-1">ราคาเหมาวัน: ฿<?php echo number_format($booking['price_per_day'] ?? 0); ?></p>
+                            <p class="text-blue-600 font-bold text-sm mt-1">ราคาเหมาวัน: ฿<?php echo number_format($booking['price_per_day']); ?></p>
                         </div>
                     </div>
 
@@ -226,18 +212,21 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                     </div>
                 </div>
 
+                <!-- ยอดชำระ -->
                 <div class="border-t-2 border-dashed border-gray-100 pt-6 mb-8">
                     <div class="flex justify-between items-end">
                         <p class="text-gray-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
-                        <p class="text-4xl font-black text-blue-600">฿<?php echo number_format($total_price, 2); ?></p>
+                        <p class="text-4xl font-black text-blue-600">฿<?php echo number_format($total_price); ?></p>
                     </div>
                 </div>
 
+                <!-- ช่องทางการชำระเงิน -->
                 <div class="space-y-6 mb-8">
                     <h3 class="text-gray-800 font-bold flex items-center">
                         <i class="fa fa-wallet text-blue-500 mr-2"></i> ช่องทางการชำระเงิน
                     </h3>
 
+                    <!-- 1. QR Code PromptPay -->
                     <div class="bg-white border-2 border-blue-100 rounded-3xl p-6 text-center shadow-sm relative overflow-hidden">
                         <div class="absolute top-0 right-0 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-bl-xl font-bold uppercase">แนะนำ</div>
                         <p class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-4">สแกน QR Code เพื่อชำระเงิน</p>
@@ -247,10 +236,11 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                  alt="PromptPay QR Code" class="w-48 h-48 mx-auto opacity-90">
                         </div>
                         
-                        <p class="font-bold text-blue-900 text-lg">ล่องแพหนองกวาก</p>
-                        <p class="text-gray-400 text-sm">PromptPay ID: 081-038-4818</p>
+                        <p class="font-bold text-blue-900 text-lg">บจก.หนองกวากจำกัด</p>
+                        <p class="text-gray-400 text-sm">PromptPay ID: 089-123-4567</p>
                     </div>
 
+                    <!-- 2. บัญชีธนาคาร -->
                     <div class="space-y-3">
                         <p class="text-gray-400 text-xs font-bold uppercase tracking-widest pl-2">หรือเลือกโอนผ่านบัญชีธนาคาร</p>
                         
@@ -259,19 +249,31 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                 <div class="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-md">KBANK</div>
                                 <div>
                                     <p class="text-xs text-green-800 font-bold uppercase">ธนาคารกสิกรไทย</p>
-                                    <p class="font-black text-gray-700">161-1-99653-1</p>
+                                    <p class="font-black text-gray-700">012-3-45678-9</p>
                                 </div>
                             </div>
-                            <button type="button" onclick="navigator.clipboard.writeText('1611996531'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
+                            <button onclick="navigator.clipboard.writeText('012-3-45678-9')" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
+                        </div>
+
+                        <div class="bg-purple-50 p-4 rounded-2xl border border-purple-100 flex items-center justify-between">
+                            <div class="flex items-center gap-4">
+                                <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-md">SCB</div>
+                                <div>
+                                    <p class="text-xs text-purple-800 font-bold uppercase">ธนาคารไทยพาณิชย์</p>
+                                    <p class="font-black text-gray-700">987-6-54321-0</p>
+                                </div>
+                            </div>
+                            <button onclick="navigator.clipboard.writeText('987-6-54321-0')" class="text-gray-400 hover:text-purple-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
                         </div>
                     </div>
-                    
+
+                    <!-- 3. ส่วนแนบสลิป -->
                     <div class="border-t-2 border-dashed border-gray-100 pt-8">
                         <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                             <i class="fa fa-file-invoice text-blue-500 mr-2"></i> หลักฐานการโอนเงิน
                         </h3>
 
-                        <?php if (!empty($slip_img_url)): ?>
+                        <?php if (!empty($slip_img)): ?>
                             <div class="bg-emerald-50 border border-emerald-200 rounded-3xl p-6 mb-6 shadow-sm">
                                 <div class="flex items-center justify-between border-b border-emerald-200/60 pb-3 mb-4">
                                     <span class="text-emerald-800 font-extrabold text-sm flex items-center gap-2">
@@ -282,11 +284,10 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                     </span>
                                 </div>
                                 <div class="text-center">
-                                    <img src="<?php echo htmlspecialchars($slip_img_url); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=400&q=80';">
+                                    <img src="uploads/slips/<?php echo htmlspecialchars($slip_img); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white">
                                 </div>
                             </div>
                         <?php else: ?>
-                            <!-- 🟢 ฟอร์มอัปโหลดรูปแบบปกติ (ส่งให้ PHP ฝั่งหลังบ้านจัดการทั้งหมด ปลอดภัยชัวร์) -->
                             <form action="save_payment.php" method="POST" enctype="multipart/form-data" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
                                 <input type="hidden" name="booking_id" value="<?php echo $booking_id; ?>">
                                 
@@ -296,28 +297,25 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                     </label>
                                     <input type="file" name="payment_slip" accept="image/*" required
                                            class="block w-full text-sm text-slate-500
-                                                 file:mr-4 file:py-2.5 file:px-5
-                                                 file:rounded-xl file:border-0
-                                                 file:text-xs file:font-bold
-                                                 file:bg-blue-600 file:text-white
-                                                 hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
+                                                  file:mr-4 file:py-2.5 file:px-5
+                                                  file:rounded-xl file:border-0
+                                                  file:text-xs file:font-bold
+                                                  file:bg-blue-600 file:text-white
+                                                  hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
                                 </div>
                                 
-                                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2" onclick="this.innerHTML='<i class=\'fa fa-spinner fa-spin mr-1\'></i> กำลังอัปโหลด...'; this.style.pointerEvents='none';">
+                                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2">
                                     <i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน
                                 </button>
                             </form>
                         <?php endif; ?>
 
+                        <!-- เมนูตัวเลือกด้านล่าง -->
                         <div class="flex flex-col gap-3">
-                            <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
-                                <i class="fab fa-line text-2xl"></i> ติดต่อสอบถามเพิ่มเติมผ่าน LINE (@906kkkfr)
+                            <a href="<?php echo $line_redirect_url; ?>" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
+                                <i class="fab fa-line text-2xl"></i> ส่งรายละเอียดและแจ้งโอนเงินผ่าน LINE
                             </a>
                             
-                            <a href="customer_calendar.php" class="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 py-4 rounded-2xl font-bold text-center transition flex items-center justify-center gap-2 shadow-sm">
-                                <i class="fa fa-calendar-alt text-blue-500"></i> ตรวจสอบคิวในปฏิทินการจอง
-                            </a>
-
                             <a href="index.php" class="bg-gray-100 text-gray-600 w-full py-4 rounded-2xl font-bold text-center hover:bg-gray-200 transition">
                                 <i class="fa fa-arrow-left mr-2"></i> กลับหน้าหลัก
                             </a>
