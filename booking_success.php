@@ -185,14 +185,16 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
                         
-                        <!-- โหลดรูปแพ -->
+                        <!-- 🟢 โหลดรูปแพตรงนี้ -->
                         <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
                             <?php 
                             $displayImg = '';
                             if (!empty($booking['featured_image'])) {
                                 $raw_img = trim($booking['featured_image']);
+                                // ตัดคำว่า uploads/ หรือ ./ ออกให้หมด
                                 $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $raw_img), '/');
-                                $displayImg = 'uploads/' . $clean_name;
+                                // ประกอบ path ใหม่ที่ถูกต้อง (เติม / ข้างหน้าเพื่อให้เริ่มหาจาก root เสมอ)
+                                $displayImg = '/uploads/' . $clean_name;
                             }
                             ?>
                             
@@ -298,33 +300,17 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     </span>
                                 </div>
                                 
-                                <!-- 🟢 โหลดรูปลสิปของจริง พร้อมตัวช่วยเช็ค Path -->
+                                <!-- 🟢 โหลดรูปลสิปของจริง (เพิ่ม / นำหน้าเพื่อเริ่มหาจาก Root เสมอ) -->
                                 <div class="text-center">
                                     <?php 
-                                    // 1. ทำความสะอาดชื่อไฟล์ ป้องกันคำว่า uploads/ หรือ slips/ ซ้อนกัน
                                     $clean_slip = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|slips\/|\/)+/i', '', $slip_img), '/');
-                                    $final_slip_url = 'uploads/' . $clean_slip;
-                                    
-                                    // 2. เช็คว่ามีไฟล์อยู่จริงบน Server หรือไม่ (สำหรับ Debug)
-                                    $file_exists_on_server = file_exists(__DIR__ . '/' . $final_slip_url);
+                                    // 🟢 เพิ่ม / นำหน้าเพื่อป้องกัน Path เพี้ยน
+                                    $final_slip_url = '/uploads/' . $clean_slip;
                                     ?>
                                     
                                     <img src="<?php echo htmlspecialchars($final_slip_url); ?>" 
                                          class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white"
                                          alt="หลักฐานการชำระเงิน">
-                                         
-                                    <!-- ส่วนแจ้งเตือน Debug -->
-                                    <?php if (!$file_exists_on_server): ?>
-                                        <p class="text-[11px] text-rose-500 mt-3 font-bold bg-rose-50 p-2 rounded-lg border border-rose-200">
-                                            ⚠️ ค้นหาไฟล์รูปไม่พบ!<br>
-                                            <span class="font-normal">ระบบกำลังพยายามหาไฟล์ที่: <span class="font-mono"><?php echo htmlspecialchars($final_slip_url); ?></span></span><br>
-                                            <span class="font-normal text-gray-500">*หากคุณอัปโหลดสลิปบน Render ฟรี ไฟล์อาจถูกลบไปแล้วเมื่อระบบรีสตาร์ท</span>
-                                        </p>
-                                    <?php else: ?>
-                                        <p class="text-[10px] text-emerald-500 mt-2 font-mono bg-emerald-50 p-1 rounded inline-block border border-emerald-200">
-                                            ✓ เจอไฟล์รูป: <?php echo htmlspecialchars($final_slip_url); ?>
-                                        </p>
-                                    <?php endif; ?>
                                 </div>
                                 
                             </div>
