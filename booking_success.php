@@ -187,7 +187,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
-                        
                         <div>
                             <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($raft_display_name); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
@@ -249,9 +248,10 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                     <p class="font-black text-gray-700">161-1-99653-1</p>
                                 </div>
                             </div>
-                            <button type="button" onclick="navigator.clipboard.writeText('012-3-45678-9'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
+                            <button type="button" onclick="navigator.clipboard.writeText('1611996531'); alert('คัดลอกเลขบัญชีแล้ว');" class="text-gray-400 hover:text-green-600 transition p-2"><i class="fa fa-copy text-lg"></i></button>
                         </div>
-                        
+                    </div>
+                    
                     <!-- 3. ส่วนแนบสลิป -->
                     <div class="border-t-2 border-dashed border-gray-100 pt-8">
                         <h3 class="text-gray-800 font-bold mb-4 flex items-center">
@@ -297,11 +297,15 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
 
                         <!-- เมนูตัวเลือกด้านล่าง -->
                         <div class="flex flex-col gap-3">
-                            <!-- ลิงก์ติดต่อสอบถามทั่วไป ไม่มีการบังคับใส่ข้อความให้ลูกค้ากดส่งเอง -->
                             <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
                                 <i class="fab fa-line text-2xl"></i> ติดต่อสอบถามเพิ่มเติมผ่าน LINE (@906kkkfr)
                             </a>
                             
+                            <!-- ปุ่มตรวจสอบคิวปฏิทินของลูกค้า -->
+                            <a href="customer_calendar.php" class="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 py-4 rounded-2xl font-bold text-center transition flex items-center justify-center gap-2 shadow-sm">
+                                <i class="fa fa-calendar-alt text-blue-500"></i> ตรวจสอบคิวในปฏิทินการจอง
+                            </a>
+
                             <a href="index.php" class="bg-gray-100 text-gray-600 w-full py-4 rounded-2xl font-bold text-center hover:bg-gray-200 transition">
                                 <i class="fa fa-arrow-left mr-2"></i> กลับหน้าหลัก
                             </a>
