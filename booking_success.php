@@ -71,9 +71,39 @@ $check_in_time = !empty($booking['check_in_time']) ? date('H:i', strtotime($book
 $check_out_date = $booking['check_out_date'] ?? (!empty($booking['check_out']) ? date('Y-m-d', strtotime($booking['check_out'])) : $check_in_date);
 $check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($booking['check_out_time'])) : (!empty($booking['check_out']) ? date('H:i', strtotime($booking['check_out'])) : '17:30');
 
-// ดึงยอดชำระเงิน (รองรับ total_amount, total_price, raft_price)
+// ดึงยอดชำระเงิน
 $total_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
-$slip_img = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
+$raw_slip = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
+
+// 🟢 ฟังก์ชันจัดการแสดงผลรูปสลิปให้ถูกต้องเสมอ (รองรับ Base64, URL เต็ม และไฟล์ในเครื่อง)
+function get_slip_image_url($img_val) {
+    $img_val = trim($img_val ?? '');
+    if (empty($img_val)) return '';
+
+    // ถ้ารูปเป็น Base64 หรือ Full URL ให้ส่งออกทันที
+    if (preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
+        return $img_val;
+    }
+
+    // ตัด path ซ้ำซ้อนออก
+    $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/slips\/|uploads\/|\/uploads\/slips\/|\/uploads\/)+/i', '', $img_val), '/');
+    
+    // ตรวจสอบในโฟลเดอร์ uploads/slips/
+    $dir = __DIR__ . '/uploads/slips/';
+    if (is_dir($dir) && file_exists($dir . $clean_name)) {
+        return 'uploads/slips/' . $clean_name;
+    }
+
+    // ตรวจสอบในโฟลเดอร์ uploads/ เผื่อเก็บไว้ที่นั่น
+    $dir_alt = __DIR__ . '/uploads/';
+    if (is_dir($dir_alt) && file_exists($dir_alt . $clean_name)) {
+        return 'uploads/' . $clean_name;
+    }
+
+    return 'uploads/slips/' . $clean_name;
+}
+
+$slip_img_url = get_slip_image_url($raw_slip);
 
 // สถานะการจอง
 $is_confirmed = (isset($booking['status_id']) && (int)$booking['status_id'] === 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
@@ -119,7 +149,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
             <p class="text-gray-500 mt-2 font-bold">ขอบคุณที่ไว้วางใจล่องแพหนองกวากกับเรา</p>
         </div>
 
-        <!-- 🟢 กล่องแจ้งเตือนสถานะการส่งข้อความเข้า LINE ลูกค้าอัตโนมัติ -->
         <?php if ($has_line): ?>
             <div class="mb-6 p-4 bg-emerald-50 border-2 border-emerald-300 rounded-3xl flex items-center gap-4 shadow-sm">
                 <div class="w-12 h-12 bg-[#06C755] text-white rounded-2xl flex items-center justify-center shrink-0 text-2xl shadow-md shadow-emerald-200">
@@ -133,13 +162,12 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
         <?php endif; ?>
 
         <div class="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-gray-100">
-            <!-- Header ส่วนแสดงรหัสจอง -->
             <div class="bg-slate-900 p-8 text-center text-white relative overflow-hidden">
                 <div class="relative z-10">
                     <p class="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">รหัสการจอง (Booking Code)</p>
                     <p class="text-4xl font-black text-blue-400 tracking-wider"><?php echo htmlspecialchars($booking_code); ?></p>
                     
-                    <?php if (!empty($slip_img)): ?>
+                    <?php if (!empty($raw_slip)): ?>
                         <?php if ($is_confirmed): ?>
                             <div class="inline-block bg-emerald-500/20 text-emerald-300 text-[11px] px-4 py-1.5 rounded-full font-bold uppercase mt-3 border border-emerald-500/30">
                                 <i class="fa fa-check-circle mr-1"></i> ยืนยันการจองเรียบร้อยแล้ว
@@ -160,7 +188,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
             </div>
 
             <div class="p-8 md:p-12">
-                <!-- ข้อมูลลูกค้า -->
                 <div class="mb-8 p-6 bg-slate-50 rounded-3xl border border-slate-100">
                     <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                         <i class="fa fa-user-circle text-blue-500 mr-2"></i> ข้อมูลผู้จอง
@@ -181,7 +208,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                     </div>
                 </div>
 
-                <!-- รายละเอียดการจอง -->
                 <div class="mb-10">
                     <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
@@ -208,7 +234,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                     </div>
                 </div>
 
-                <!-- ยอดชำระ -->
                 <div class="border-t-2 border-dashed border-gray-100 pt-6 mb-8">
                     <div class="flex justify-between items-end">
                         <p class="text-gray-500 font-bold mb-1">ยอดชำระทั้งหมด</p>
@@ -216,13 +241,11 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                     </div>
                 </div>
 
-                <!-- ช่องทางการชำระเงิน -->
                 <div class="space-y-6 mb-8">
                     <h3 class="text-gray-800 font-bold flex items-center">
                         <i class="fa fa-wallet text-blue-500 mr-2"></i> ช่องทางการชำระเงิน
                     </h3>
 
-                    <!-- 1. QR Code PromptPay -->
                     <div class="bg-white border-2 border-blue-100 rounded-3xl p-6 text-center shadow-sm relative overflow-hidden">
                         <div class="absolute top-0 right-0 bg-blue-600 text-white text-[10px] px-3 py-1 rounded-bl-xl font-bold uppercase">แนะนำ</div>
                         <p class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-4">สแกน QR Code เพื่อชำระเงิน</p>
@@ -236,7 +259,6 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                         <p class="text-gray-400 text-sm">PromptPay ID: 081-038-4818</p>
                     </div>
 
-                    <!-- 2. บัญชีธนาคาร -->
                     <div class="space-y-3">
                         <p class="text-gray-400 text-xs font-bold uppercase tracking-widest pl-2">หรือเลือกโอนผ่านบัญชีธนาคาร</p>
                         
@@ -252,13 +274,12 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                         </div>
                     </div>
                     
-                    <!-- 3. ส่วนแนบสลิป -->
                     <div class="border-t-2 border-dashed border-gray-100 pt-8">
                         <h3 class="text-gray-800 font-bold mb-4 flex items-center">
                             <i class="fa fa-file-invoice text-blue-500 mr-2"></i> หลักฐานการโอนเงิน
                         </h3>
 
-                        <?php if (!empty($slip_img)): ?>
+                        <?php if (!empty($slip_img_url)): ?>
                             <div class="bg-emerald-50 border border-emerald-200 rounded-3xl p-6 mb-6 shadow-sm">
                                 <div class="flex items-center justify-between border-b border-emerald-200/60 pb-3 mb-4">
                                     <span class="text-emerald-800 font-extrabold text-sm flex items-center gap-2">
@@ -269,7 +290,8 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                     </span>
                                 </div>
                                 <div class="text-center">
-                                    <img src="uploads/slips/<?php echo htmlspecialchars($slip_img); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white">
+                                    <!-- 🟢 ใช้ฟังก์ชัน get_slip_image_url แสดงผลภาพอย่างปลอดภัย -->
+                                    <img src="<?php echo htmlspecialchars($slip_img_url); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=400&q=80';">
                                 </div>
                             </div>
                         <?php else: ?>
@@ -295,13 +317,11 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                             </form>
                         <?php endif; ?>
 
-                        <!-- เมนูตัวเลือกด้านล่าง -->
                         <div class="flex flex-col gap-3">
                             <a href="https://line.me/R/ti/p/@906kkkfr" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
                                 <i class="fab fa-line text-2xl"></i> ติดต่อสอบถามเพิ่มเติมผ่าน LINE (@906kkkfr)
                             </a>
                             
-                            <!-- ปุ่มตรวจสอบคิวปฏิทินของลูกค้า -->
                             <a href="customer_calendar.php" class="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 py-4 rounded-2xl font-bold text-center transition flex items-center justify-center gap-2 shadow-sm">
                                 <i class="fa fa-calendar-alt text-blue-500"></i> ตรวจสอบคิวในปฏิทินการจอง
                             </a>
