@@ -185,7 +185,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
                         
-                        <!-- 🟢 แก้ไขการโหลดรูปแพตรงนี้ -->
+                        <!-- 🟢 โหลดรูปแพตรงนี้ -->
                         <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
                             <?php 
                             $displayImg = '';
@@ -300,9 +300,14 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                         <?php echo $is_confirmed ? 'อนุมัติแล้ว' : 'รอการตรวจสอบ'; ?>
                                     </span>
                                 </div>
+                                
+                                <!-- 🟢 แก้ไขการโหลดรูปสลิป และเพิ่ม onerror -->
                                 <div class="text-center">
-                                    <img src="uploads/slips/<?php echo htmlspecialchars($slip_img); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white">
+                                    <img src="uploads/<?php echo htmlspecialchars($slip_img); ?>" 
+                                         class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white"
+                                         onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80';">
                                 </div>
+                                
                             </div>
                         <?php else: ?>
                             <form action="save_payment.php" method="POST" enctype="multipart/form-data" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
