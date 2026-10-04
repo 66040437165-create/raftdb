@@ -284,8 +284,8 @@ if ($conn) {
     <!-- Header Hero -->
     <header class="hero-bg text-white pt-32 pb-20 md:pt-48 md:pb-12 h-[75vh] md:h-auto flex items-center justify-center">
         <div class="container mx-auto text-center px-6">
-            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight">ล่องแพหนองกวาก</h2>
-            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90">สัมผัสธรรมชาติ พักผ่อนหย่อนใจ บริการล่องแพมาตรฐาน</p>
+            <h2 class="text-4xl md:text-6xl font-extrabold mb-4 drop-shadow-2xl leading-tight"></h2>
+            <p class="text-base md:text-xl mb-12 md:mb-16 text-blue-50 font-medium opacity-90"></p>
 
             <div class="glass-effect p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl text-gray-800 max-w-6xl mx-auto border border-white/40 md:-mb-24 relative z-10">
                 <form action="index.php#rafts" method="GET" class="flex flex-col md:grid md:grid-cols-5 gap-4 md:gap-6 items-stretch md:items-end">
@@ -406,7 +406,7 @@ if ($conn) {
                         <i class="fab fa-line text-sm"></i> Official Account
                     </span>
                     <h3 class="text-3xl md:text-4xl font-black mb-3 leading-tight">
-                        แอดไลน์ร้าน ล่องแพหนองกวาก
+                        แอดไลน์ศูนย์บริการ ล่องแพหนองกวาก
                     </h3>
                     <p class="text-emerald-100 text-sm md:text-base leading-relaxed mb-6">
                         รับแจ้งเตือนสถานะการจองทันใจ ส่งสลิปโอนเงิน หรือสอบถามพูดคุยกับเจ้าหน้าที่ได้ตลอด 24 ชั่วโมง สะดวก รวดเร็ว ไม่พลาดทุกการติดต่อ
