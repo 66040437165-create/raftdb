@@ -27,7 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['payment_slip'])) {
     $transfer_amount = isset($_POST['transfer_amount']) && !empty($_POST['transfer_amount']) ? floatval($_POST['transfer_amount']) : $default_price;
 
     // 3. จัดการอัปโหลดไฟล์รูปสลิป
-    $target_dir = "uploads/slips/";
+    // 🟢 แก้ไขตรงนี้: เปลี่ยนจาก uploads/slips/ เป็น uploads/
+    $target_dir = "uploads/";
     if (!file_exists($target_dir)) { 
         mkdir($target_dir, 0777, true); 
     }
