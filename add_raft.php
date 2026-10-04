@@ -175,7 +175,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>เพิ่มแพใหม่ - ChillRaft Admin</title>
+    <title>เพิ่มแพใหม่</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700;800&display=swap" rel="stylesheet">
@@ -216,7 +216,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
                 <?php endif; ?>
 
-                <h2 class="text-2xl font-black mb-8 text-slate-800 italic uppercase tracking-tighter border-b pb-4 flex items-center gap-3">
+                <h2 class="text-2xl font-black mb-8 text-slate-800 uppercase tracking-tighter border-b pb-4 flex items-center gap-3">
                     <div class="bg-blue-500 text-white w-10 h-10 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-100">
                         <i class="fa fa-plus text-lg"></i>
                     </div>
