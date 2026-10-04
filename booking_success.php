@@ -184,13 +184,30 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
+                        
+                        <!-- 🟢 แก้ไขการโหลดรูปแพตรงนี้ -->
                         <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
-                            <?php if(!empty($booking['featured_image'])): ?>
-                                <img src="uploads/<?php echo htmlspecialchars($booking['featured_image']); ?>" class="w-full h-full object-cover">
+                            <?php 
+                            $displayImg = '';
+                            if (!empty($booking['featured_image'])) {
+                                $raw_img = trim($booking['featured_image']);
+                                // ตัดคำว่า uploads/ หรือ ./ ออกให้หมด
+                                $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/|\/uploads\/)+/i', '', $raw_img), '/');
+                                // ประกอบ path ใหม่ที่ถูกต้อง
+                                $displayImg = 'uploads/' . $clean_name;
+                            }
+                            ?>
+                            
+                            <?php if(!empty($displayImg)): ?>
+                                <img src="<?php echo htmlspecialchars($displayImg); ?>" 
+                                     alt="<?php echo htmlspecialchars($booking['raft_name']); ?>" 
+                                     class="w-full h-full object-cover"
+                                     onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=80';">
                             <?php else: ?>
                                 <div class="w-full h-full flex items-center justify-center text-slate-400 text-2xl"><i class="fa fa-ship"></i></div>
                             <?php endif; ?>
                         </div>
+                        
                         <div>
                             <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($booking['raft_name']); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
