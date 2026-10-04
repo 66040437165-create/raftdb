@@ -187,13 +187,7 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                         <i class="fa fa-ship text-blue-500 mr-2"></i> รายละเอียดแพที่จอง
                     </h3>
                     <div class="flex items-start gap-4 mb-6">
-                        <div class="w-24 h-24 rounded-2xl overflow-hidden shadow-md shrink-0 bg-slate-100 border border-slate-200">
-                            <?php if(!empty($booking['featured_image'])): ?>
-                                <img src="uploads/<?php echo htmlspecialchars($booking['featured_image']); ?>" class="w-full h-full object-cover">
-                            <?php else: ?>
-                                <div class="w-full h-full flex items-center justify-center text-slate-400 text-2xl"><i class="fa fa-ship"></i></div>
-                            <?php endif; ?>
-                        </div>
+                        
                         <div>
                             <h4 class="text-xl font-black text-gray-800"><?php echo htmlspecialchars($raft_display_name); ?></h4>
                             <p class="text-gray-500 text-xs mt-1"><i class="fa fa-users mr-1"></i> รองรับสูงสุด <?php echo $booking['capacity'] ?? '-'; ?> ท่าน</p>
