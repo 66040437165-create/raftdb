@@ -295,14 +295,16 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                 </div>
                             </div>
                         <?php else: ?>
-                            <form action="save_payment.php" method="POST" enctype="multipart/form-data" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
+                            <!-- 🟢 ฟอร์มอัปโหลดรูปไปฝาก Cloud (ImgBB) อัตโนมัติ -->
+                            <form id="paymentForm" action="save_payment.php" method="POST" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
                                 <input type="hidden" name="booking_id" value="<?php echo $booking_id; ?>">
+                                <input type="hidden" name="slip_url" id="slip_url" value="">
                                 
                                 <div>
                                     <label class="block text-xs font-extrabold text-slate-700 mb-2 uppercase tracking-wide">
                                         <i class="fa fa-image text-blue-500 mr-1"></i> แนบรูปไฟล์สลิปโอนเงิน <span class="text-red-500">*</span>
                                     </label>
-                                    <input type="file" name="payment_slip" accept="image/*" required
+                                    <input type="file" id="payment_slip" accept="image/*" required
                                            class="block w-full text-sm text-slate-500
                                                  file:mr-4 file:py-2.5 file:px-5
                                                  file:rounded-xl file:border-0
@@ -311,10 +313,54 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                                  hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
                                 </div>
                                 
-                                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2">
-                                    <i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน
+                                <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2">
+                                    <span id="btnText"><i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน</span>
                                 </button>
                             </form>
+
+                            <!-- สคริปต์อัปโหลดรูปภาพขึ้น Cloud -->
+                            <script>
+                                document.getElementById('paymentForm').addEventListener('submit', async function(e) {
+                                    e.preventDefault(); 
+                                    
+                                    const fileInput = document.getElementById('payment_slip');
+                                    if (fileInput.files.length === 0) return;
+                                    
+                                    const btn = document.getElementById('submitBtn');
+                                    const btnText = document.getElementById('btnText');
+                                    
+                                    btn.disabled = true;
+                                    btn.classList.add('opacity-75', 'cursor-not-allowed');
+                                    btnText.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i> กำลังอัปโหลดรูปสลิป...';
+                                    
+                                    const formData = new FormData();
+                                    formData.append('image', fileInput.files[0]);
+                                    formData.append('key', '30ca5dbcc6895c25e839e334df58d4d8'); // ImgBB API Key
+                                    
+                                    try {
+                                        const response = await fetch('https://api.imgbb.com/1/upload', {
+                                            method: 'POST',
+                                            body: formData
+                                        });
+                                        const data = await response.json();
+                                        
+                                        if (data.success) {
+                                            document.getElementById('slip_url').value = data.data.url;
+                                            this.submit(); 
+                                        } else {
+                                            alert('อัปโหลดรูปล้มเหลว กรุณาลองใหม่อีกครั้ง');
+                                            btn.disabled = false;
+                                            btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                                            btnText.innerHTML = '<i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน';
+                                        }
+                                    } catch (error) {
+                                        alert('เกิดข้อผิดพลาดในการเชื่อมต่อเครือข่าย กรุณาลองใหม่');
+                                        btn.disabled = false;
+                                        btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                                        btnText.innerHTML = '<i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน';
+                                    }
+                                });
+                            </script>
                         <?php endif; ?>
 
                         <div class="flex flex-col gap-3">
