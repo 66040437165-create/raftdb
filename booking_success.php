@@ -201,8 +201,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                             <?php if(!empty($displayImg)): ?>
                                 <img src="<?php echo htmlspecialchars($displayImg); ?>" 
                                      alt="<?php echo htmlspecialchars($booking['raft_name']); ?>" 
-                                     class="w-full h-full object-cover"
-                                     onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=80';">
+                                     class="w-full h-full object-cover">
                             <?php else: ?>
                                 <div class="w-full h-full flex items-center justify-center text-slate-400 text-2xl"><i class="fa fa-ship"></i></div>
                             <?php endif; ?>
@@ -301,11 +300,11 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                                     </span>
                                 </div>
                                 
-                                <!-- 🟢 แก้ไขการโหลดรูปสลิป และเพิ่ม onerror -->
+                                <!-- 🟢 โหลดรูปลสิปของจริง (ลบ onerror ทิ้งแล้ว) -->
                                 <div class="text-center">
                                     <img src="uploads/<?php echo htmlspecialchars($slip_img); ?>" 
                                          class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white"
-                                         onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80';">
+                                         alt="หลักฐานการชำระเงิน">
                                 </div>
                                 
                             </div>
