@@ -263,7 +263,8 @@ if ($conn) {
                 <span class="hidden xs:inline text-sm md:text-base font-bold text-gray-700">จองแพออนไลน์</span>
             </a>
             <div class="flex items-center space-x-2 md:space-x-4">
-                <a href="booking_calendar.php" class="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-3 py-2 rounded-xl text-xs transition font-bold flex items-center gap-1">
+                <!-- 🟢 เปลี่ยนลิงก์ปฏิทินให้ชี้ไปที่ customer_calendar.php -->
+                <a href="customer_calendar.php" class="bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-3 py-2 rounded-xl text-xs transition font-bold flex items-center gap-1">
                     <i class="fa fa-calendar-alt text-blue-500"></i> ปฏิทินการจอง
                 </a>
                 
