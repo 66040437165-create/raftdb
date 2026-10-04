@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     if (!empty($title) && $amount > 0) {
         $stmt = pg_prepare($conn, "add_exp", "INSERT INTO expenses (title, amount, expense_date, created_at) VALUES ($1, $2, $3, NOW())");
-        @pg_execute($conn, "add_exp", array($title, $amount, $expense_date));
+        pg_execute($conn, "add_exp", array($title, $amount, $expense_date));
         header("Location: manage_finances.php?success=1");
         exit();
     }
@@ -43,23 +43,23 @@ if (isset($_GET['delete_expense'])) {
 
 // 4. คำนวณสรุปยอดรายรับ - รายจ่าย (PostgreSQL Syntax)
 $income_today = 0;
-$res = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
+$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND DATE(paid_at) = '$today'");
 if ($res && $row = pg_fetch_assoc($res)) { $income_today = floatval($row['total']); }
 
 $expense_today = 0;
-$res = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
+$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE expense_date = '$today'");
 if ($res && $row = pg_fetch_assoc($res)) { $expense_today = floatval($row['total']); }
 
 $income_month = 0;
-$res = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
+$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'confirmed' AND TO_CHAR(paid_at, 'YYYY-MM') = '$this_month'");
 if ($res && $row = pg_fetch_assoc($res)) { $income_month = floatval($row['total']); }
 
 $expense_month = 0;
-$res = @pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
+$res = pg_query($conn, "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE TO_CHAR(expense_date, 'YYYY-MM') = '$this_month'");
 if ($res && $row = pg_fetch_assoc($res)) { $expense_month = floatval($row['total']); }
 
 // 5. ดึงรายการรายรับล่าสุด (จาก Payments)
-$recent_incomes = @pg_query($conn, "
+$recent_incomes = pg_query($conn, "
     SELECT p.*, b.booking_id, COALESCE(c.customer_name, c.full_name, 'ลูกค้าทั่วไป') as customer_name
     FROM payments p
     LEFT JOIN bookings b ON p.booking_id = b.booking_id
@@ -69,7 +69,7 @@ $recent_incomes = @pg_query($conn, "
 ");
 
 // 6. ดึงรายการรายจ่ายล่าสุด (จาก Expenses)
-$recent_expenses = @pg_query($conn, "SELECT * FROM expenses ORDER BY expense_date DESC, id DESC LIMIT 10");
+$recent_expenses = pg_query($conn, "SELECT id, title, amount, expense_date FROM expenses ORDER BY expense_date DESC, id DESC LIMIT 10");
 ?>
 
 <!DOCTYPE html>
