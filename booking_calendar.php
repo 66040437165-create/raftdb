@@ -12,8 +12,6 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
     
     $raft_filter   = isset($_GET['raft_id']) ? intval($_GET['raft_id']) : 0;
     $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-    $start         = isset($_GET['start']) ? trim($_GET['start']) : '';
-    $end           = isset($_GET['end']) ? trim($_GET['end']) : '';
 
     $where = [];
     $params = [];
@@ -38,19 +36,8 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
         }
     }
 
-    // กรองช่วงวันที่
-    if (!empty($start)) {
-        $start_date = substr($start, 0, 10);
-        $where[] = "(COALESCE(b.check_out_date, b.check_in_date, b.check_in::date, CURRENT_DATE) >= $" . $p_idx++ . "::date)";
-        $params[] = $start_date;
-    }
-    if (!empty($end)) {
-        $end_date = substr($end, 0, 10);
-        $where[] = "(COALESCE(b.check_in_date, b.check_in::date, CURRENT_DATE) <= $" . $p_idx++ . "::date)";
-        $params[] = $end_date;
-    }
-
-    $where_sql = count($where) > 0 ? "WHERE " . implode(" AND ", $where) : "";
+    // กำหนดเงื่อนไขดึงข้อมูล (เอาเฉพาะที่ยังไม่ยกเลิก)
+    $where_sql = count($where) > 0 ? "WHERE " . implode(" AND ", $where) : "WHERE (b.status NOT IN ('cancelled', 'rejected') OR b.status IS NULL)";
 
     $sql = "SELECT b.*, 
                    COALESCE(b.id, 0) AS booking_id_clean,
@@ -60,12 +47,14 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
                    COALESCE(c.full_name, b.guest_name, 'ลูกค้าทั่วไป') AS display_name,
                    COALESCE(c.phone, b.guest_tel, '-') AS display_tel,
                    COALESCE(c.email, b.guest_email, '-') AS display_email,
-                   COALESCE(b.total_amount, b.total_price, b.raft_price, 0) AS final_price
+                   COALESCE(b.total_amount, b.total_price, b.raft_price, 0) AS final_price,
+                   COALESCE(b.check_in_date, CAST(b.check_in AS DATE)) AS valid_check_in,
+                   COALESCE(b.check_out_date, CAST(b.check_out AS DATE)) AS valid_check_out
             FROM bookings b 
             LEFT JOIN rafts r ON b.raft_id = r.id 
             LEFT JOIN customers c ON b.customer_id = c.id
             $where_sql 
-            ORDER BY COALESCE(b.check_in_date, b.check_in::date) ASC";
+            ORDER BY valid_check_in ASC";
 
     $events = [];
 
@@ -74,11 +63,11 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
 
         if ($result) {
             while ($row = pg_fetch_assoc($result)) {
-                $check_in_date = $row['check_in_date'] ?? (!empty($row['check_in']) ? date('Y-m-d', strtotime($row['check_in'])) : date('Y-m-d'));
+                $check_in_date = !empty($row['valid_check_in']) ? date('Y-m-d', strtotime($row['valid_check_in'])) : date('Y-m-d');
                 $check_in_time = !empty($row['check_in_time']) ? date('H:i', strtotime($row['check_in_time'])) : '09:00';
                 $start_iso     = "{$check_in_date}T{$check_in_time}:00";
 
-                $check_out_date = $row['check_out_date'] ?? (!empty($row['check_out']) ? date('Y-m-d', strtotime($row['check_out'])) : $check_in_date);
+                $check_out_date = !empty($row['valid_check_out']) ? date('Y-m-d', strtotime($row['valid_check_out'])) : $check_in_date;
                 $check_out_time = !empty($row['check_out_time']) ? date('H:i', strtotime($row['check_out_time'])) : '17:30';
                 $end_iso        = "{$check_out_date}T{$check_out_time}:00";
 
@@ -748,7 +737,7 @@ $total_rafts_count = count($rafts);
 
         function resetFilters() {
             document.getElementById('raftFilter').value = '0';
-            document.getElementById('statusFilter').value = 'confirmed';
+            document.getElementById('statusFilter').value = 'confirmed'; // Default to "confirmed" filter? Look at the default value of select
             refreshCalendar();
         }
 
