@@ -2,96 +2,102 @@
 session_start();
 require_once __DIR__ . '/db_config.php';
 
-// ตั้งค่า Base URL และเชื่อมต่อ PostgreSQL (ใช้ตัวแปร $conn จาก db_config.php ที่รองรับ Render แล้ว)
 // --- AJAX API ENDPOINT ---
 if (isset($_GET['api']) && $_GET['api'] == '1') {
+    if (ob_get_level()) { ob_end_clean(); }
     header('Content-Type: application/json; charset=utf-8');
     
     $raft_filter = isset($_GET['raft_id']) ? intval($_GET['raft_id']) : 0;
-    $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
-    $start = isset($_GET['start']) ? $_GET['start'] : '';
-    $end = isset($_GET['end']) ? $_GET['end'] : '';
+    $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
+    $start = isset($_GET['start']) ? trim($_GET['start']) : '';
+    $end = isset($_GET['end']) ? trim($_GET['end']) : '';
 
     $where = [];
     $params = [];
     $p_idx = 1;
 
     if ($raft_filter > 0) {
-        $where[] = "b.raft_id = $" . $p_idx;
+        $where[] = "b.raft_id = $" . $p_idx++;
         $params[] = $raft_filter;
-        $p_idx++;
     }
     if (!empty($status_filter)) {
-        if ($status_filter === 'active') {
-            $where[] = "b.status IN ('confirmed', 'completed')";
-        } else {
-            $where[] = "b.status = $" . $p_idx;
-            $params[] = $status_filter;
-            $p_idx++;
+        if ($status_filter === 'active' || $status_filter === 'confirmed') {
+            $where[] = "(LOWER(b.status) IN ('confirmed', 'active', 'ยืนยันแล้ว') OR b.status_id = 2)";
+        } elseif ($status_filter === 'pending') {
+            $where[] = "(LOWER(b.status) IN ('pending', 'รอตรวจสอบ') OR b.status_id = 1)";
+        } elseif ($status_filter === 'completed') {
+            $where[] = "(LOWER(b.status) IN ('completed', 'เสร็จสิ้น') OR b.status_id = 5)";
+        } elseif ($status_filter === 'cancelled') {
+            $where[] = "(LOWER(b.status) IN ('cancelled', 'rejected', 'cancel', 'ยกเลิก') OR b.status_id IN (3, 4))";
         }
-    }
-    if (!empty($start)) {
-        $start_clean = substr($start, 0, 10);
-        $where[] = "b.check_out >= ($" . $p_idx . " || ' 00:00:00')::timestamp";
-        $params[] = $start_clean;
-        $p_idx++;
-    }
-    if (!empty($end)) {
-        $end_clean = substr($end, 0, 10);
-        $where[] = "b.check_in <= ($" . $p_idx . " || ' 23:59:59')::timestamp";
-        $params[] = $end_clean;
-        $p_idx++;
     }
 
     $where_sql = count($where) > 0 ? "WHERE " . implode(" AND ", $where) : "";
 
-    $sql = "SELECT b.*, r.name as raft_name, r.capacity, u.fullname as user_fullname 
+    $sql = "SELECT b.*, r.name as raft_name, r.capacity,
+                   COALESCE(b.check_in_date, CAST(b.check_in AS DATE)) AS valid_check_in,
+                   COALESCE(b.check_out_date, CAST(b.check_out AS DATE)) AS valid_check_out
             FROM bookings b 
             JOIN rafts r ON b.raft_id = r.id 
-            LEFT JOIN users u ON b.user_id = u.id 
             $where_sql 
-            ORDER BY b.check_in ASC";
+            ORDER BY valid_check_in ASC";
 
     $result = !empty($params) ? @pg_query_params($conn, $sql, $params) : @pg_query($conn, $sql);
     $events = [];
 
     if ($result) {
         while ($row = pg_fetch_assoc($result)) {
+            $check_in_date = !empty($row['valid_check_in']) ? date('Y-m-d', strtotime($row['valid_check_in'])) : date('Y-m-d');
+            $check_in_time = !empty($row['check_in_time']) ? date('H:i', strtotime($row['check_in_time'])) : '09:00';
+            $start_iso     = "{$check_in_date}T{$check_in_time}:00";
+
+            $check_out_date = !empty($row['valid_check_out']) ? date('Y-m-d', strtotime($row['valid_check_out'])) : $check_in_date;
+            $check_out_time = !empty($row['check_out_time']) ? date('H:i', strtotime($row['check_out_time'])) : '17:30';
+            $end_iso        = "{$check_out_date}T{$check_out_time}:00";
+
+            $raw_status = strtolower(trim($row['status'] ?? ''));
+            $st_id = intval($row['status_id'] ?? 0);
+
             $color = '#3b82f6'; 
             $border_color = '#2563eb';
             $status_th = 'รอดำเนินการ';
+            $status_key = 'pending';
 
-            if ($row['status'] == 'confirmed') {
+            if ($raw_status === 'confirmed' || $raw_status === 'active' || $st_id === 2 || $raw_status === 'ยืนยันแล้ว') {
                 $color = '#10b981'; 
                 $border_color = '#059669';
                 $status_th = 'ยืนยันแล้ว (ติดจอง)';
-            } elseif ($row['status'] == 'completed') {
+                $status_key = 'confirmed';
+            } elseif ($raw_status === 'completed' || $raw_status === 'เสร็จสิ้น') {
                 $color = '#3b82f6'; 
                 $border_color = '#1d4ed8';
                 $status_th = 'เสร็จสิ้น';
-            } elseif ($row['status'] == 'pending') {
+                $status_key = 'completed';
+            } elseif ($raw_status === 'pending' || $st_id === 1 || $raw_status === 'รอตรวจสอบ') {
                 $color = '#f59e0b'; 
                 $border_color = '#d97706';
                 $status_th = 'รอตรวจสอบ';
-            } elseif ($row['status'] == 'cancelled') {
+                $status_key = 'pending';
+            } elseif ($raw_status === 'cancelled' || $raw_status === 'rejected' || in_array($st_id, [3, 4]) || $raw_status === 'ยกเลิก') {
                 $color = '#ef4444'; 
                 $border_color = '#b91c1c';
                 $status_th = 'ยกเลิกการจอง';
+                $status_key = 'cancelled';
             }
 
-            $display_name = !empty($row['guest_name']) ? $row['guest_name'] : (!empty($row['user_fullname']) ? $row['user_fullname'] : 'ลูกค้าทั่วไป');
+            $display_name = !empty($row['guest_name']) ? $row['guest_name'] : 'ลูกค้าทั่วไป';
 
-            // ปิดบังเบอร์โทรเพื่อความเป็นส่วนตัวของลูกค้าทั่วไป
+            // ซ่อนเบอร์โทรบางส่วนเพื่อความเป็นส่วนตัว
             $tel = !empty($row['guest_tel']) ? $row['guest_tel'] : '-';
-            if (strlen($tel) >= 9 && !isset($_SESSION['role'])) {
+            if (strlen($tel) >= 9) {
                 $tel = substr($tel, 0, 3) . '***' . substr($tel, -3);
             }
 
             $events[] = [
                 'id' => $row['id'],
                 'title' => '⛵ ' . $row['raft_name'] . ' (' . $display_name . ')',
-                'start' => $row['check_in'],
-                'end' => $row['check_out'],
+                'start' => $start_iso,
+                'end' => $end_iso,
                 'backgroundColor' => $color,
                 'borderColor' => $border_color,
                 'textColor' => '#ffffff',
@@ -102,12 +108,12 @@ if (isset($_GET['api']) && $_GET['api'] == '1') {
                     'capacity' => $row['capacity'] ?? 0,
                     'guest_name' => $display_name,
                     'guest_tel' => $tel,
-                    'total_price' => number_format($row['total_price'] ?? 0, 2),
-                    'status' => $row['status'],
+                    'total_price' => number_format($row['total_amount'] ?? $row['total_price'] ?? 0, 2),
+                    'status' => $status_key,
                     'status_th' => $status_th,
-                    'check_in_formatted' => date('d/m/Y H:i', strtotime($row['check_in'])),
-                    'check_out_formatted' => date('d/m/Y H:i', strtotime($row['check_out'])),
-                    'check_in_raw' => date('Y-m-d', strtotime($row['check_in']))
+                    'check_in_formatted' => date('d/m/Y H:i', strtotime($start_iso)),
+                    'check_out_formatted' => date('d/m/Y H:i', strtotime($end_iso)),
+                    'check_in_raw' => $check_in_date
                 ]
             ];
         }
@@ -260,7 +266,7 @@ $total_rafts_count = count($rafts);
                         <label class="block text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1">กรองตามแพ</label>
                         <select id="raftFilter" onchange="refreshCalendar()" class="w-full sm:w-56 bg-slate-50 border border-slate-300 font-bold text-gray-700 text-sm rounded-xl p-2.5 outline-none focus:border-blue-500">
                             <option value="0">⛵ แพทั้งหมด (ทุกลำ)</option>
-                            <?php foreach ($rafts as$r): ?>
+                            <?php foreach ($rafts as $r): ?>
                                 <option value="<?php echo $r['raft_id']; ?>"><?php echo htmlspecialchars($r['raft_name']); ?></option>
                             <?php endforeach; ?>
                         </select>
@@ -311,7 +317,7 @@ $total_rafts_count = count($rafts);
     <div id="bookingModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
         <div class="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-100">
             <div class="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white relative">
-                <button onclick="closeModal('bookingModal')" class="absolute top-4 right-4 text-white/80 hover:text-white bg-white/10 w-8 h-8 rounded-full flex items-center justify-center transition">
+                <button onclick="closeModal('bookingModal')" class="absolute top-4 right-4 text-white/80 hover:text-white bg-white/15 w-8 h-8 rounded-full flex items-center justify-center transition">
                     <i class="fa fa-times"></i>
                 </button>
                 <div class="flex items-center gap-2 text-xs font-bold text-blue-200 uppercase tracking-widest mb-1">
@@ -356,6 +362,28 @@ $total_rafts_count = count($rafts);
                 <button onclick="closeModal('bookingModal')" class="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-gray-700 font-bold text-xs rounded-xl transition">ปิด</button>
                 <a id="modalActionBtn" href="index.php#rafts" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow-md flex items-center gap-1.5">
                     <i class="fa fa-plus-circle"></i> จองแพนี้ในวันอื่น
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Date Click (แสดงรายการจองทั้งหมดในวันที่คลิก) -->
+    <div id="dateModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-100">
+            <div class="bg-slate-900 p-5 text-white relative">
+                <button onclick="closeModal('dateModal')" class="absolute top-4 right-4 text-gray-400 hover:text-white bg-slate-800 w-8 h-8 rounded-full flex items-center justify-center transition">
+                    <i class="fa fa-times"></i>
+                </button>
+                <div class="text-xs font-bold text-blue-400 uppercase tracking-widest"><i class="fa fa-calendar-day mr-1"></i> รายการจองประจำวัน</div>
+                <h3 id="dateModalTitle" class="text-xl font-black mt-1"></h3>
+            </div>
+            <div class="p-6 max-h-[60vh] overflow-y-auto">
+                <div id="dateBookingsList" class="space-y-3"></div>
+            </div>
+            <div class="bg-slate-50 p-4 px-6 border-t border-slate-100 flex justify-between items-center">
+                <button onclick="closeModal('dateModal')" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-gray-700 font-bold text-xs rounded-xl transition">ปิด</button>
+                <a id="dateBookActionBtn" href="index.php#rafts" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition shadow-md flex items-center gap-1.5">
+                    <i class="fa fa-calendar-plus"></i> จองแพในวันนี้
                 </a>
             </div>
         </div>
@@ -406,6 +434,51 @@ $total_rafts_count = count($rafts);
 
                     document.getElementById('modalActionBtn').href = `index.php?checkin=${props.check_in_raw}#rafts`;
                     openModal('bookingModal');
+                },
+                dateClick: function(info) {
+                    const clickedDate = info.dateStr;
+                    const dateObj = new Date(clickedDate);
+                    const formattedDate = dateObj.toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' });
+
+                    document.getElementById('dateModalTitle').textContent = formattedDate;
+                    document.getElementById('dateBookActionBtn').href = `index.php?checkin=${clickedDate}#rafts`;
+
+                    const allEvents = calendar.getEvents();
+                    const dayEvents = allEvents.filter(ev => {
+                        const start = ev.startStr.substr(0, 10);
+                        const end = ev.endStr ? ev.endStr.substr(0, 10) : start;
+                        return clickedDate >= start && clickedDate <= end;
+                    });
+
+                    const listContainer = document.getElementById('dateBookingsList');
+                    listContainer.innerHTML = '';
+
+                    if (dayEvents.length === 0) {
+                        listContainer.innerHTML = `
+                            <div class="text-center py-8 bg-emerald-50 rounded-2xl border border-emerald-100">
+                                <div class="text-4xl mb-2">⛵</div>
+                                <h4 class="font-bold text-emerald-800 text-base">ยังไม่มีการจองในวันนี้</h4>
+                                <p class="text-xs text-emerald-600 mt-1">แพทุกคิวว่าง พร้อมให้บริการในวันที่เลือก</p>
+                            </div>
+                        `;
+                    } else {
+                        dayEvents.forEach(ev => {
+                            const p = ev.extendedProps;
+                            const card = document.createElement('div');
+                            card.className = 'p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between';
+                            card.innerHTML = `
+                                <div>
+                                    <div class="font-bold text-slate-800 text-sm">⛵ ${p.raft_name}</div>
+                                    <div class="text-xs text-slate-500 mt-0.5">👤 ผู้จอง: ${p.guest_name} | 💰 ฿${p.total_price} | 🕒 ${p.check_in_formatted}</div>
+                                </div>
+                                <span class="text-xs font-bold px-2.5 py-1 rounded-full ${p.status === 'confirmed' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
+                                    ${p.status_th}
+                                </span>
+                            `;
+                            listContainer.appendChild(card);
+                        });
+                    }
+                    openModal('dateModal');
                 }
             });
 
