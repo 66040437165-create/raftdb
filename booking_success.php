@@ -10,7 +10,7 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 
 $booking_id = intval($_GET['id']);
 
-// 2. ดึงข้อมูลการจอง + ข้อมูลแพ
+// 2. ดึงข้อมูลการจอง + ข้อมูลแพ (ใช้ pg_query_params สำหรับ PostgreSQL)
 $sql = "SELECT b.*, 
                r.name AS raft_name, 
                r.price_per_day, 
@@ -22,12 +22,12 @@ $sql = "SELECT b.*,
         FROM bookings b
         JOIN rafts r ON b.raft_id = r.id
         LEFT JOIN customers c ON b.customer_id = c.id
-        WHERE b.id = $booking_id
+        WHERE b.id = $1
         LIMIT 1";
 
-$result = $conn->query($sql);
+$result = @pg_query_params($conn, $sql, array($booking_id));
 
-if (!$result || $result->num_rows == 0) {
+if (!$result || pg_num_rows($result) == 0) {
     echo "<div style='text-align:center; padding:50px; font-family:sans-serif;'>
             <h2>ไม่พบข้อมูลการจอง</h2>
             <a href='index.php'>กลับหน้าหลัก</a>
@@ -35,15 +35,25 @@ if (!$result || $result->num_rows == 0) {
     exit();
 }
 
-$booking = $result->fetch_assoc();
+$booking = pg_fetch_assoc($result);
 
 // ดึงข้อมูลสลิปจากตาราง payments (ถ้ามีตารางนี้)
 $payment = null;
-$chk_payment_table = $conn->query("SHOW TABLES LIKE 'payments'");
-if ($chk_payment_table && $chk_payment_table->num_rows > 0) {
-    $pay_res = $conn->query("SELECT * FROM payments WHERE booking_id = $booking_id ORDER BY id DESC LIMIT 1");
-    if ($pay_res && $pay_res->num_rows > 0) {
-        $payment = $pay_res->fetch_assoc();
+$check_table_sql = "SELECT EXISTS (
+    SELECT FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_name = 'payments'
+)";
+$chk_payment_table = @pg_query($conn, $check_table_sql);
+
+if ($chk_payment_table) {
+    $row = pg_fetch_row($chk_payment_table);
+    if ($row[0] === 't') { // 't' คือ true ใน PostgreSQL
+        $pay_sql = "SELECT * FROM payments WHERE booking_id = $1 ORDER BY id DESC LIMIT 1";
+        $pay_res = @pg_query_params($conn, $pay_sql, array($booking_id));
+        if ($pay_res && pg_num_rows($pay_res) > 0) {
+            $payment = pg_fetch_assoc($pay_res);
+        }
     }
 }
 
@@ -309,7 +319,7 @@ $line_redirect_url = "https://line.me/R/oaMessage/{$line_oa_id}/?{$encoded_line_
                             </form>
                         <?php endif; ?>
 
-                        <!-- เมนูตัวเลือกด้านล่าง -->
+                        <!-- เมนูตัวเลือกด้านล่าง จะแสดงเสมอไม่ว่าจะแนบสลิปแล้วหรือไม่ -->
                         <div class="flex flex-col gap-3">
                             <a href="<?php echo $line_redirect_url; ?>" target="_blank" class="w-full bg-[#06C755] hover:bg-[#05b34c] text-white py-4 rounded-2xl font-bold text-center shadow-lg shadow-emerald-100 transition flex items-center justify-center gap-2">
                                 <i class="fab fa-line text-2xl"></i> ส่งรายละเอียดและแจ้งโอนเงินผ่าน LINE
