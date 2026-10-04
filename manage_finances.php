@@ -431,8 +431,6 @@ if (!empty($start_date) && !empty($end_date)) {
                         .text-right { text-align: right; }
                         .text-center { text-align: center; }
                         .summary-box { margin-top: 25px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px 20px; border-radius: 12px; font-size: 14px; }
-                        .summary-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
-                        .summary-row:last-child { margin-bottom: 0; border-top: 1px solid #cbd5e1; padding-top: 8px; font-weight: bold; font-size: 16px; }
                     </style>
                 </head>
                 <body>
