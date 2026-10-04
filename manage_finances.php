@@ -1,6 +1,6 @@
 <?php
 session_start();
-require_once __DIR__ . '/../db_config.php';
+require_once __DIR__ . '/db_config.php';
 
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role_id']) || (int)$_SESSION['role_id'] !== 1) {
     header("Location: admin_dashboard.php?msg=access_denied");
@@ -501,16 +501,6 @@ if (!empty($start_date) && !empty($end_date)) {
             }
             expenseTitleEl.addEventListener('input', checkAndFillPrice);
             expenseTitleEl.addEventListener('change', checkAndFillPrice);
-        }
-
-        const expenseForm = document.querySelector('form[action="manage_finances.php"]');
-        if (expenseForm) {
-            expenseForm.addEventListener('submit', function(e) {
-                if (expenseAmountEl && parseFloat(expenseAmountEl.value) <= 0) {
-                    alert('กรุณากรอกจำนวนเงินให้มากกว่า 0 ครับ');
-                    e.preventDefault();
-                }
-            });
         }
 
         function toggleSidebar() {
