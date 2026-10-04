@@ -75,26 +75,22 @@ $check_out_time = !empty($booking['check_out_time']) ? date('H:i', strtotime($bo
 $total_price = floatval($booking['total_amount'] ?? $booking['total_price'] ?? $booking['raft_price'] ?? 0);
 $raw_slip = $payment['slip_image'] ?? $booking['slip_image'] ?? '';
 
-// 🟢 ฟังก์ชันจัดการแสดงผลรูปสลิปให้ถูกต้องเสมอ (รองรับ Base64, URL เต็ม และไฟล์ในเครื่อง)
+// 🟢 ฟังก์ชันจัดการแสดงผลรูปสลิปให้ถูกต้องเสมอ
 function get_slip_image_url($img_val) {
     $img_val = trim($img_val ?? '');
     if (empty($img_val)) return '';
 
-    // ถ้ารูปเป็น Base64 หรือ Full URL ให้ส่งออกทันที
     if (preg_match('/^(https?:\/\/|data:image\/)/i', $img_val)) {
         return $img_val;
     }
 
-    // ตัด path ซ้ำซ้อนออก
     $clean_name = ltrim(preg_replace('/^(\.\.\/|\.\/|uploads\/slips\/|uploads\/|\/uploads\/slips\/|\/uploads\/)+/i', '', $img_val), '/');
     
-    // ตรวจสอบในโฟลเดอร์ uploads/slips/
     $dir = __DIR__ . '/uploads/slips/';
     if (is_dir($dir) && file_exists($dir . $clean_name)) {
         return 'uploads/slips/' . $clean_name;
     }
 
-    // ตรวจสอบในโฟลเดอร์ uploads/ เผื่อเก็บไว้ที่นั่น
     $dir_alt = __DIR__ . '/uploads/';
     if (is_dir($dir_alt) && file_exists($dir_alt . $clean_name)) {
         return 'uploads/' . $clean_name;
@@ -105,13 +101,9 @@ function get_slip_image_url($img_val) {
 
 $slip_img_url = get_slip_image_url($raw_slip);
 
-// สถานะการจอง
 $is_confirmed = (isset($booking['status_id']) && (int)$booking['status_id'] === 2) || (isset($booking['status']) && $booking['status'] === 'confirmed');
-
-// ตรวจสอบว่าผู้ใช้เชื่อมต่อ LINE อยู่หรือไม่
 $has_line = !empty($_SESSION['line_user_id']) || !empty($_SESSION['user_line_id']) || !empty($booking['line_user_id']);
 
-// ฟังก์ชันแปลงวันที่เป็นภาษาไทย
 function thai_date_short($date_str) {
     if (!$date_str) return '-';
     $timestamp = strtotime($date_str);
@@ -290,21 +282,19 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                     </span>
                                 </div>
                                 <div class="text-center">
-                                    <!-- 🟢 ใช้ฟังก์ชัน get_slip_image_url แสดงผลภาพอย่างปลอดภัย -->
                                     <img src="<?php echo htmlspecialchars($slip_img_url); ?>" class="max-h-56 mx-auto rounded-2xl shadow-md border-2 border-white" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1544644181-1484b3fdfc62?auto=format&fit=crop&w=400&q=80';">
                                 </div>
                             </div>
                         <?php else: ?>
-                            <!-- 🟢 ฟอร์มอัปโหลดรูปไปฝาก Cloud (ImgBB) อัตโนมัติ -->
-                            <form id="paymentForm" action="save_payment.php" method="POST" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
+                            <!-- 🟢 ฟอร์มอัปโหลดรูปแบบปกติ (ส่งให้ PHP ฝั่งหลังบ้านจัดการทั้งหมด ปลอดภัยชัวร์) -->
+                            <form action="save_payment.php" method="POST" enctype="multipart/form-data" class="mb-8 space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-200/80 shadow-inner">
                                 <input type="hidden" name="booking_id" value="<?php echo $booking_id; ?>">
-                                <input type="hidden" name="slip_url" id="slip_url" value="">
                                 
                                 <div>
                                     <label class="block text-xs font-extrabold text-slate-700 mb-2 uppercase tracking-wide">
                                         <i class="fa fa-image text-blue-500 mr-1"></i> แนบรูปไฟล์สลิปโอนเงิน <span class="text-red-500">*</span>
                                     </label>
-                                    <input type="file" id="payment_slip" accept="image/*" required
+                                    <input type="file" name="payment_slip" accept="image/*" required
                                            class="block w-full text-sm text-slate-500
                                                  file:mr-4 file:py-2.5 file:px-5
                                                  file:rounded-xl file:border-0
@@ -313,54 +303,10 @@ $raft_display_name = !empty($booking['raft_name']) ? $booking['raft_name'] : ('�
                                                  hover:file:bg-blue-700 cursor-pointer bg-white p-2 rounded-2xl border border-slate-200">
                                 </div>
                                 
-                                <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2">
-                                    <span id="btnText"><i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน</span>
+                                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-lg shadow-blue-200 transition text-sm flex items-center justify-center gap-2" onclick="this.innerHTML='<i class=\'fa fa-spinner fa-spin mr-1\'></i> กำลังอัปโหลด...'; this.style.pointerEvents='none';">
+                                    <i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน
                                 </button>
                             </form>
-
-                            <!-- สคริปต์อัปโหลดรูปภาพขึ้น Cloud -->
-                            <script>
-                                document.getElementById('paymentForm').addEventListener('submit', async function(e) {
-                                    e.preventDefault(); 
-                                    
-                                    const fileInput = document.getElementById('payment_slip');
-                                    if (fileInput.files.length === 0) return;
-                                    
-                                    const btn = document.getElementById('submitBtn');
-                                    const btnText = document.getElementById('btnText');
-                                    
-                                    btn.disabled = true;
-                                    btn.classList.add('opacity-75', 'cursor-not-allowed');
-                                    btnText.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i> กำลังอัปโหลดรูปสลิป...';
-                                    
-                                    const formData = new FormData();
-                                    formData.append('image', fileInput.files[0]);
-                                    formData.append('key', '30ca5dbcc6895c25e839e334df58d4d8'); // ImgBB API Key
-                                    
-                                    try {
-                                        const response = await fetch('https://api.imgbb.com/1/upload', {
-                                            method: 'POST',
-                                            body: formData
-                                        });
-                                        const data = await response.json();
-                                        
-                                        if (data.success) {
-                                            document.getElementById('slip_url').value = data.data.url;
-                                            this.submit(); 
-                                        } else {
-                                            alert('อัปโหลดรูปล้มเหลว กรุณาลองใหม่อีกครั้ง');
-                                            btn.disabled = false;
-                                            btn.classList.remove('opacity-75', 'cursor-not-allowed');
-                                            btnText.innerHTML = '<i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน';
-                                        }
-                                    } catch (error) {
-                                        alert('เกิดข้อผิดพลาดในการเชื่อมต่อเครือข่าย กรุณาลองใหม่');
-                                        btn.disabled = false;
-                                        btn.classList.remove('opacity-75', 'cursor-not-allowed');
-                                        btnText.innerHTML = '<i class="fa fa-check-circle mr-1"></i> ยืนยันการแจ้งชำระเงิน';
-                                    }
-                                });
-                            </script>
                         <?php endif; ?>
 
                         <div class="flex flex-col gap-3">
